@@ -40,6 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit binary
+        uses: taiki-e/install-action@cargo-audit
+      - name: Generate Cargo.lock for audit
+        run: cargo generate-lockfile
+      - name: Run rustsec/audit-check
+        uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
