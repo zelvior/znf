@@ -97,7 +97,9 @@ impl ImageMetadata {
                     "metadata TLV truncated at key".into(),
                 ));
             }
-            let key = String::from_utf8_lossy(&bytes[offset..offset + key_len]).into_owned();
+            let key = std::str::from_utf8(&bytes[offset..offset + key_len])
+                .map_err(|_| ZimgError::MalformedImage("metadata TLV key is not valid UTF-8".into()))?
+                .to_owned();
             offset += key_len;
             if offset + 2 > bytes.len() {
                 return Err(ZimgError::MalformedImage(
@@ -111,7 +113,9 @@ impl ImageMetadata {
                     "metadata TLV truncated at value".into(),
                 ));
             }
-            let val = String::from_utf8_lossy(&bytes[offset..offset + val_len]).into_owned();
+            let val = std::str::from_utf8(&bytes[offset..offset + val_len])
+                .map_err(|_| ZimgError::MalformedImage("metadata TLV value is not valid UTF-8".into()))?
+                .to_owned();
             offset += val_len;
             match key.as_str() {
                 "title" => meta.title = Some(val),

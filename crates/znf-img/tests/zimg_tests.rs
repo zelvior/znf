@@ -8,6 +8,7 @@ use znf_img::{AlphaInfo, ColorSpace};
 use znf_img::format;
 use znf_compression::Config as CompConfig;
 use znf_crypto::KdfParams;
+use znf_img::encode::CompressionStrategy;
 
 fn make_rgb8(width: u32, height: u32) -> Image {
     let pf = PixelFormat {
@@ -527,4 +528,148 @@ fn multiple_filters_same_image() {
     for size in &encoded_sizes {
         assert!(*size > 0);
     }
+}
+
+#[test]
+fn color_space_linear_roundtrip() {
+    let pf = PixelFormat {
+        color_model: ColorModel::Rgb,
+        bit_depth: BitDepth::Bits8,
+        channel_count: 3,
+        alpha: AlphaInfo::None,
+        color_space: ColorSpace::Linear,
+    };
+    let mut img = Image::new(10, 10, pf).unwrap();
+    for y in 0..10 {
+        let row = img.row_mut(y).unwrap();
+        for x in 0..10 {
+            let i = (x * 3) as usize;
+            row[i] = (x * 25) as u8;
+            row[i + 1] = (y * 25) as u8;
+            row[i + 2] = 128;
+        }
+    }
+    let encoded = encode_image(&img, &EncodeOptions::default()).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+    assert_eq!(
+        decoded.image.pixel_format.color_space,
+        ColorSpace::Linear,
+        "color space should round-trip as Linear"
+    );
+    assert_eq!(decoded.color_space, ColorSpace::Linear);
+}
+
+#[test]
+fn icc_profile_roundtrip() {
+    let pf = PixelFormat {
+        color_model: ColorModel::Rgb,
+        bit_depth: BitDepth::Bits8,
+        channel_count: 3,
+        alpha: AlphaInfo::None,
+        color_space: ColorSpace::Srgb,
+    };
+    let mut img = Image::new(10, 10, pf).unwrap();
+    for y in 0..10 {
+        let row = img.row_mut(y).unwrap();
+        for x in 0..10 {
+            let i = (x * 3) as usize;
+            row[i] = (x * 25) as u8;
+            row[i + 1] = (y * 25) as u8;
+            row[i + 2] = 128;
+        }
+    }
+    let icc_bytes = vec![0u8; 128]; // dummy ICC profile
+    let opts = EncodeOptions {
+        icc_profile: Some(icc_bytes.clone()),
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+    assert_eq!(
+        decoded.image.pixel_format.color_space,
+        ColorSpace::Icc,
+        "color space should be ICC when profile embedded"
+    );
+    assert_eq!(
+        decoded.icc_profile,
+        Some(icc_bytes),
+        "ICC profile should round-trip exactly"
+    );
+}
+
+#[test]
+fn metadata_roundtrip_through_encode() {
+    let img = make_rgb8(10, 10);
+    let mut meta = ImageMetadata::new();
+    meta.title = Some("My Image".into());
+    meta.description = Some("A test image".into());
+    meta.creator = Some("ZNF Test Suite".into());
+    meta.custom.insert("source".into(), "unit-test".into());
+
+    let opts = EncodeOptions {
+        metadata: Some(meta.clone()),
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+    assert_eq!(decoded.metadata.title, Some("My Image".into()));
+    assert_eq!(decoded.metadata.description, Some("A test image".into()));
+    assert_eq!(decoded.metadata.creator, Some("ZNF Test Suite".into()));
+    assert_eq!(decoded.metadata.custom.get("source"), Some(&"unit-test".to_string()));
+}
+
+#[test]
+fn lz4_compression_roundtrip() {
+    // LZ4 must set the correct header compression ID (Lz4, not Zstd).
+    let img = make_rgb8(200, 100);
+    let opts = EncodeOptions {
+        compression: CompConfig::lz4(),
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+}
+
+#[test]
+fn adaptive_filter_roundtrip() {
+    let img = make_rgb8(100, 50);
+    let opts = EncodeOptions {
+        adaptive_filter: true,
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+}
+
+#[test]
+fn adaptive_compression_strategy_roundtrip() {
+    let img = make_rgb8(200, 100);
+    let opts = EncodeOptions {
+        compression_strategy: CompressionStrategy::Adaptive,
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
+}
+
+#[test]
+fn chunk_index_uncompressed_len_includes_filter_bytes() {
+    // Verify that the chunk index uncompressed_len accounts for the
+    // 1-byte filter prefix per row by round-tripping with a filter that
+    // changes every byte value.
+    let img = make_rgb8(100, 50);
+    let opts = EncodeOptions {
+        filter: FilterType::Paeth,
+        compression: CompConfig::stored(), // stored so we can inspect layout
+        ..EncodeOptions::default()
+    };
+    let encoded = encode_image(&img, &opts).unwrap();
+    let decoded = decode_image(&encoded.bytes, &DecodeOptions::default()).unwrap();
+    assert_eq!(decoded.image.data, img.data);
 }

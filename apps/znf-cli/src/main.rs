@@ -1603,11 +1603,16 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
         ));
     }
 
+    let kdf_params = if password.is_some() {
+        Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+    } else {
+        None
+    };
     let opts = EncodeOptions {
         compression,
         filter,
         password,
-        kdf_params: None,
+        kdf_params,
         chunk_strategy: ChunkStrategy::default(),
         include_integrity: true,
     };
@@ -1795,11 +1800,16 @@ fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
             ));
         }
 
+        let kdf_params = if password.is_some() {
+            Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+        } else {
+            None
+        };
         let opts2 = EncodeOptions {
             compression: znf_compression::Config::zstd(3),
             filter: FilterType::None,
-            password: None,
-            kdf_params: None,
+            password,
+            kdf_params,
             chunk_strategy: ChunkStrategy::default(),
             include_integrity: true,
         };
@@ -1956,11 +1966,16 @@ fn cmd_image_optimize(m: &ArgMatches) -> Result<(), String> {
         ));
     }
 
+    let kdf_params = if password.is_some() {
+        Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+    } else {
+        None
+    };
     let opts2 = EncodeOptions {
         compression,
         filter: FilterType::None,
-        password: decoded.encrypted.then_some(password.unwrap_or_default()).flatten(),
-        kdf_params: None,
+        password,
+        kdf_params,
         chunk_strategy: ChunkStrategy::default(),
         include_integrity: true,
     };
