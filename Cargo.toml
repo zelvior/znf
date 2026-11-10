@@ -8,6 +8,7 @@ members = [
     "crates/znf-stream",
     "crates/znf-recovery",
     "crates/znf-zarc",
+    "crates/znf-img",
     "apps/znf-cli",
 ]
 

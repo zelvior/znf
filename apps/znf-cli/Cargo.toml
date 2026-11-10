@@ -23,3 +23,4 @@ znf-crypto = { path = "../../crates/znf-crypto" }
 znf-integrity = { path = "../../crates/znf-integrity" }
 znf-recovery = { path = "../../crates/znf-recovery" }
 znf-zarc = { path = "../../crates/znf-zarc" }
+znf-img = { path = "../../crates/znf-img" }

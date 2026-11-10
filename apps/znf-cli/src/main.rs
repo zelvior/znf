@@ -18,6 +18,10 @@ use znf_core::{
     EncryptionKeySource, FormatId, ZnfCompression, ZnfMetadata, ZnfReader, ZnfValidator, ZnfWriter,
     CORE_SPEC_VERSION, HEADER_LEN,
 };
+use znf_img::{
+    decode_image, encode_image, AlphaInfo, BitDepth, ChunkStrategy, ColorModel, ColorSpace,
+    DecodeOptions, EncodeOptions, FilterType, Image, PixelFormat,
+};
 use znf_zarc::{
     add_paths_to_archive_file, attempt_parity_repair, inspect_archive,
     remove_entries_from_archive_file, ArchiveProgress, EntryKind, ExtractOptions, ReadOptions,
@@ -254,6 +258,190 @@ fn zarc_remove_command(name: &'static str) -> Command {
         .arg(common_json_arg())
 }
 
+fn image_encode_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Encode an image to .zimg (lossless)")
+        .arg(
+            Arg::new("input")
+                .value_name("INPUT.png")
+                .required(true)
+                .help("Input image file (PNG or raw RGB/RGBA/gray)"),
+        )
+        .arg(
+            Arg::new("output")
+                .value_name("OUTPUT.zimg")
+                .required(true)
+                .help("Output .zimg file path"),
+        )
+        .arg(
+            Arg::new("compression")
+                .short('c')
+                .long("compression")
+                .value_name("ALGO")
+                .default_value("zstd")
+                .help("Compression algorithm: zstd, lz4, or store"),
+        )
+        .arg(
+            Arg::new("level")
+                .short('l')
+                .long("level")
+                .value_name("1..22")
+                .default_value("3")
+                .help("Zstandard compression level (1..22)"),
+        )
+        .arg(
+            Arg::new("filter")
+                .short('f')
+                .long("filter")
+                .value_name("TYPE")
+                .default_value("none")
+                .help("Scanline filter: none, sub, up, average, paeth"),
+        )
+        .arg(
+            Arg::new("encrypt")
+                .short('e')
+                .long("encrypt")
+                .action(ArgAction::SetTrue)
+                .help("Encrypt image payload with XChaCha20-Poly1305 + Argon2id"),
+        )
+        .arg(common_password_arg())
+        .arg(
+            Arg::new("overwrite")
+                .short('o')
+                .long("overwrite")
+                .action(ArgAction::SetTrue)
+                .help("Allow overwriting existing output file"),
+        )
+        .arg(common_progress_arg())
+        .arg(common_json_arg())
+}
+
+fn image_decode_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Decode a .zimg image to PNG or raw pixels")
+        .arg(
+            Arg::new("input")
+                .value_name("INPUT.zimg")
+                .required(true)
+                .help("Input .zimg file path"),
+        )
+        .arg(
+            Arg::new("output")
+                .value_name("OUTPUT.png")
+                .required(true)
+                .help("Output decoded image file path"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn image_inspect_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Inspect a .zimg image without decoding pixels")
+        .arg(
+            Arg::new("file")
+                .value_name("IMAGE.zimg")
+                .required(true)
+                .help("Path to .zimg image"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn image_verify_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Verify .zimg image integrity (BLAKE3 hashes, AEAD tags)")
+        .arg(
+            Arg::new("file")
+                .value_name("IMAGE.zimg")
+                .required(true)
+                .help("Path to .zimg image"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn image_metadata_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Display or remove image metadata")
+        .arg(
+            Arg::new("file")
+                .value_name("IMAGE.zimg")
+                .required(true)
+                .help("Path to .zimg image"),
+        )
+        .arg(
+            Arg::new("remove")
+                .long("remove")
+                .action(ArgAction::SetTrue)
+                .help("Remove/sanitize all metadata and write a new image"),
+        )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .value_name("OUTPUT.zimg")
+                .help("Output path (required with --remove)"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn image_info_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Display detailed .zimg image information")
+        .arg(
+            Arg::new("file")
+                .value_name("IMAGE.zimg")
+                .required(true)
+                .help("Path to .zimg image"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn image_optimize_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Re-encode a .zimg image with different compression/settings")
+        .arg(
+            Arg::new("input")
+                .value_name("INPUT.zimg")
+                .required(true)
+                .help("Input .zimg file path"),
+        )
+        .arg(
+            Arg::new("output")
+                .value_name("OUTPUT.zimg")
+                .required(true)
+                .help("Output optimized .zimg file path"),
+        )
+        .arg(
+            Arg::new("compression")
+                .short('c')
+                .long("compression")
+                .value_name("ALGO")
+                .default_value("zstd")
+                .help("Compression algorithm: zstd, lz4, or store"),
+        )
+        .arg(
+            Arg::new("level")
+                .short('l')
+                .long("level")
+                .value_name("1..22")
+                .default_value("3")
+                .help("Zstandard compression level (1..22)"),
+        )
+        .arg(common_password_arg())
+        .arg(
+            Arg::new("overwrite")
+                .short('o')
+                .long("overwrite")
+                .action(ArgAction::SetTrue)
+                .help("Allow overwriting existing output file"),
+        )
+        .arg(common_json_arg())
+}
+
 fn build_cli() -> Command {
     Command::new("znf")
         .version(VERSION_STR)
@@ -410,6 +598,19 @@ fn build_cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("image")
+                .about("Encode, decode, inspect, verify, and optimize .zimg images")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(image_encode_command("encode"))
+                .subcommand(image_decode_command("decode"))
+                .subcommand(image_inspect_command("inspect"))
+                .subcommand(image_verify_command("verify"))
+                .subcommand(image_metadata_command("metadata"))
+                .subcommand(image_info_command("info"))
+                .subcommand(image_optimize_command("optimize")),
+        )
+        .subcommand(
             Command::new("zarc")
                 .about("Create, inspect, verify, modify, and extract .zarc archives")
                 .subcommand_required(true)
@@ -479,6 +680,16 @@ fn run(matches: &ArgMatches) -> Result<(), String> {
             Some(("info", m)) => cmd_info(m),
             Some(("inspect", m)) => cmd_inspect_any(m),
             _ => Err("unknown zarc subcommand".into()),
+        },
+        Some(("image", img_m)) => match img_m.subcommand() {
+            Some(("encode", m)) => cmd_image_encode(m),
+            Some(("decode", m)) => cmd_image_decode(m),
+            Some(("inspect", m)) => cmd_image_inspect(m),
+            Some(("verify", m)) => cmd_image_verify(m),
+            Some(("metadata", m)) => cmd_image_metadata(m),
+            Some(("info", m)) => cmd_image_info(m),
+            Some(("optimize", m)) => cmd_image_optimize(m),
+            _ => Err("unknown image subcommand".into()),
         },
         _ => Err("unknown subcommand".into()),
     }
@@ -1278,3 +1489,496 @@ fn cmd_info(m: &ArgMatches) -> Result<(), String> {
     );
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// ZIMG (.zimg) CLI command handlers
+// ---------------------------------------------------------------------------
+
+fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
+    let input_path = m.get_one::<String>("input").unwrap();
+    let output_path = m.get_one::<String>("output").unwrap();
+
+    let raw = fs::read(input_path).map_err(|e| format!("failed to read '{input_path}': {e}"))?;
+
+    // Simple sidecar format: "width height color_model bit_depth" on first line
+    // e.g. "1920 1080 rgb 8" or "800 600 gray 16"
+    let meta_path = format!("{input_path}.meta");
+    let meta_ok = std::path::Path::new(&meta_path).exists();
+    let (width, height, pf) = if meta_ok {
+        let meta_raw = fs::read_to_string(&meta_path).map_err(|e| format!("failed to read '{meta_path}': {e}"))?;
+        let parts: Vec<&str> = meta_raw.trim().split_whitespace().collect();
+        if parts.len() < 4 {
+            return Err(format!("invalid metadata sidecar '{meta_path}': expected 'width height color_model bit_depth'"));
+        }
+        let w: u32 = parts[0].parse().map_err(|_| format!("invalid width in '{meta_path}'"))?;
+        let h: u32 = parts[1].parse().map_err(|_| format!("invalid height in '{meta_path}'"))?;
+        let cm = match parts[2] {
+            "rgb" => ColorModel::Rgb,
+            "rgba" => ColorModel::Rgba,
+            "gray" => ColorModel::Gray,
+            "gray_alpha" => ColorModel::GrayAlpha,
+            _ => ColorModel::Gray,
+        };
+        let bd: u32 = parts[3].parse().map_err(|_| format!("invalid bit_depth in '{meta_path}'"))?;
+        let bd = match bd {
+            8 => BitDepth::Bits8,
+            16 => BitDepth::Bits16,
+            _ => return Err(format!("unsupported bit depth {bd} in '{meta_path}'")),
+        };
+        let channel_count = cm.channel_count() as u8;
+        let alpha = if cm == ColorModel::GrayAlpha || cm == ColorModel::Rgba {
+            AlphaInfo::Present
+        } else {
+            AlphaInfo::None
+        };
+        let pf = PixelFormat {
+            color_model: cm,
+            bit_depth: bd,
+            channel_count,
+            alpha,
+            color_space: ColorSpace::Srgb,
+        };
+        (w, h, pf)
+    } else {
+        (1, 1, PixelFormat {
+            color_model: ColorModel::Gray,
+            bit_depth: BitDepth::Bits8,
+            channel_count: 1,
+            alpha: AlphaInfo::None,
+            color_space: ColorSpace::Srgb,
+        })
+    };
+
+    let mut image = Image::new(width, height, pf).map_err(|e| e.to_string())?;
+    if image.data.len() < raw.len() {
+        return Err(format!(
+            "input data {} bytes exceeds image capacity {} bytes",
+            raw.len(),
+            image.data.len()
+        ));
+    }
+    image.data[..raw.len()].copy_from_slice(&raw);
+
+    let algo_str = m.get_one::<String>("compression").unwrap().as_str();
+    let level: i32 = m
+        .get_one::<String>("level")
+        .unwrap()
+        .parse()
+        .map_err(|_| "invalid compression level (expected integer 1..22)".to_string())?;
+    let compression = match algo_str {
+        "zstd" => znf_compression::Config::zstd(level),
+        "lz4" => znf_compression::Config::lz4(),
+        "store" | "none" => znf_compression::Config::stored(),
+        other => {
+            return Err(format!(
+                "unsupported compression '{other}' (expected zstd, lz4, or store)"
+            ))
+        }
+    };
+
+    let filter_str = m.get_one::<String>("filter").unwrap().as_str();
+    let filter = match filter_str {
+        "none" => FilterType::None,
+        "sub" => FilterType::Sub,
+        "up" => FilterType::Up,
+        "average" => FilterType::Average,
+        "paeth" => FilterType::Paeth,
+        other => {
+            return Err(format!(
+                "unsupported filter '{other}' (expected none, sub, up, average, paeth)"
+            ))
+        }
+    };
+
+    let encrypt_flag = m.get_flag("encrypt") || m.contains_id("password-env");
+    let password = resolve_password(m, encrypt_flag, true)?;
+    let overwrite = m.get_flag("overwrite");
+    let show_progress = m.get_flag("progress");
+
+    let output = std::path::Path::new(output_path);
+    if output.exists() && !overwrite {
+        return Err(format!(
+            "output file already exists (pass --overwrite to replace): {}",
+            output.display()
+        ));
+    }
+
+    let opts = EncodeOptions {
+        compression,
+        filter,
+        password,
+        kdf_params: None,
+        chunk_strategy: ChunkStrategy::default(),
+        include_integrity: true,
+    };
+
+    let encoded = encode_image(&image, &opts).map_err(|e| e.to_string())?;
+
+    if show_progress {
+        eprintln!(
+            "encoded {}x{} {} -> {} bytes ({} stored)",
+            image.width, image.height, image.pixel_format.color_model,
+            encoded.bytes.len(), encoded.info.stored_len
+        );
+    }
+
+    fs::write(output, &encoded.bytes)
+        .map_err(|e| format!("failed to write '{output_path}': {e}"))?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"status\":\"encoded\",\"format\":\"ZIMG\",\"version\":\"{}.{}\",\"width\":{},\"height\":{},\"uncompressed_bytes\":{},\"stored_bytes\":{},\"encrypted\":{}}}",
+            znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1,
+            image.width, image.height,
+            encoded.info.uncompressed_len, encoded.info.stored_len,
+            encoded.info.encrypted
+        );
+    } else {
+        println!("encoded {} ({} bytes stored)", output.display(), encoded.info.stored_len);
+    }
+    Ok(())
+}
+
+fn cmd_image_decode(m: &ArgMatches) -> Result<(), String> {
+    let input_path = m.get_one::<String>("input").unwrap();
+    let output_path = m.get_one::<String>("output").unwrap();
+    let raw = fs::read(input_path).map_err(|e| format!("failed to read '{input_path}': {e}"))?;
+
+    let password = resolve_password(m, false, false)?;
+    let opts = DecodeOptions {
+        password,
+        ..DecodeOptions::default()
+    };
+
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    fs::write(output_path, &decoded.image.data)
+        .map_err(|e| format!("failed to write '{output_path}': {e}"))?;
+
+    let meta_path = format!("{output_path}.meta");
+    let cm_str = match decoded.image.pixel_format.color_model {
+        ColorModel::Gray => "gray",
+        ColorModel::GrayAlpha => "gray_alpha",
+        ColorModel::Rgb => "rgb",
+        ColorModel::Rgba => "rgba",
+    };
+    let meta_content = format!(
+        "{} {} {} {}",
+        decoded.image.width,
+        decoded.image.height,
+        cm_str,
+        decoded.image.pixel_format.bit_depth as u32
+    );
+    fs::write(&meta_path, meta_content)
+        .map_err(|e| format!("failed to write metadata sidecar '{meta_path}': {e}"))?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"status\":\"decoded\",\"format\":\"ZIMG\",\"width\":{},\"height\":{},\"bytes\":{},\"encrypted\":{},\"integrity_verified\":{}}}",
+            decoded.image.width, decoded.image.height, decoded.image.data.len(),
+            decoded.encrypted, decoded.integrity_verified
+        );
+    } else {
+        println!("decoded {}x{} -> {} ({} bytes)", decoded.image.width, decoded.image.height, output_path, decoded.image.data.len());
+    }
+    Ok(())
+}
+
+fn cmd_image_inspect(m: &ArgMatches) -> Result<(), String> {
+    let path = m.get_one::<String>("file").unwrap();
+    let raw = fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+
+    let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
+        .map_err(|e| e.to_string())?;
+    if hdr.format_id() != FormatId::ZIMG {
+        return Err(format!("not a ZIMG image (format id {:#010x})", hdr.format_id().raw()));
+    }
+    let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
+
+    let opts = DecodeOptions {
+        password,
+        verify_integrity: false,
+        ..DecodeOptions::default()
+    };
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"format\":\"ZIMG\",\"version\":\"{}.{}\",\"width\":{},\"height\":{},\"color_model\":\"{:?}\",\"bit_depth\":{},\"channels\":{},\"color_space\":\"{:?}\",\"encrypted\":{},\"integrity_verified\":{},\"file_size\":{}}}",
+            znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1,
+            decoded.image.width, decoded.image.height,
+            decoded.image.pixel_format.color_model,
+            decoded.image.pixel_format.bit_depth as u32,
+            decoded.image.pixel_format.channel_count,
+            decoded.image.pixel_format.color_space,
+            decoded.encrypted, decoded.integrity_verified,
+            raw.len()
+        );
+    } else {
+        println!("ZIMG Image Inspection");
+        println!("  File:            {path} ({} bytes)", raw.len());
+        println!("  Format:          ZIMG v{}.{}", znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1);
+        println!("  Dimensions:      {} x {}", decoded.image.width, decoded.image.height);
+        println!(
+            "  Color model:     {:?} ({} channels, {:?}-bit, alpha={:?})",
+            decoded.image.pixel_format.color_model,
+            decoded.image.pixel_format.channel_count,
+            decoded.image.pixel_format.bit_depth,
+            decoded.image.pixel_format.alpha
+        );
+        println!("  Color space:     {:?}", decoded.image.pixel_format.color_space);
+        println!("  Encrypted:       {}", decoded.encrypted);
+        println!("  Integrity:       {}", decoded.integrity_verified);
+        if !decoded.metadata.title.as_deref().unwrap_or("").is_empty() {
+            println!("  Title:           {}", decoded.metadata.title.as_deref().unwrap_or(""));
+        }
+        if !decoded.metadata.description.as_deref().unwrap_or("").is_empty() {
+            println!("  Description:     {}", decoded.metadata.description.as_deref().unwrap_or(""));
+        }
+        if !decoded.metadata.creator.as_deref().unwrap_or("").is_empty() {
+            println!("  Creator:         {}", decoded.metadata.creator.as_deref().unwrap_or(""));
+        }
+    }
+    Ok(())
+}
+
+fn cmd_image_verify(m: &ArgMatches) -> Result<(), String> {
+    let path = m.get_one::<String>("file").unwrap();
+    let raw = fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+
+    let password = resolve_password(m, false, false)?;
+    let opts = DecodeOptions {
+        password,
+        verify_integrity: true,
+        ..DecodeOptions::default()
+    };
+
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"valid\":true,\"encrypted\":{},\"integrity_verified\":{},\"pixels_verified\":{}}}",
+            decoded.encrypted, decoded.integrity_verified, decoded.image.total_pixels()
+        );
+    } else {
+        println!("OK: verified '{}'", path);
+        println!("  Pixels:          {} x {} = {}", decoded.image.width, decoded.image.height, decoded.image.total_pixels());
+        println!("  Encrypted:       {}", decoded.encrypted);
+        println!("  Integrity:       {}", decoded.integrity_verified);
+    }
+    Ok(())
+}
+
+fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
+    let path = m.get_one::<String>("file").unwrap();
+    let raw = fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+
+    let password = resolve_password(m, false, false)?;
+    let opts = DecodeOptions {
+        password,
+        verify_integrity: false,
+        ..DecodeOptions::default()
+    };
+
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    if m.get_flag("remove") {
+        let output_path = m.get_one::<String>("output").ok_or_else(|| {
+            "--output is required with --remove".to_string()
+        })?;
+        let overwrite = m.get_flag("overwrite");
+        let output = std::path::Path::new(output_path);
+        if output.exists() && !overwrite {
+            return Err(format!(
+                "output file already exists (pass --overwrite to replace): {}",
+                output.display()
+            ));
+        }
+
+        let opts2 = EncodeOptions {
+            compression: znf_compression::Config::zstd(3),
+            filter: FilterType::None,
+            password: None,
+            kdf_params: None,
+            chunk_strategy: ChunkStrategy::default(),
+            include_integrity: true,
+        };
+        let encoded = encode_image(&decoded.image, &opts2).map_err(|e| e.to_string())?;
+        fs::write(output, &encoded.bytes)
+            .map_err(|e| format!("failed to write '{output_path}': {e}"))?;
+        if m.get_flag("json") {
+            println!("{{\"status\":\"metadata_removed\",\"output\":\"{}\"}}", json_escape(output_path));
+        } else {
+            println!("metadata removed -> {}", output.display());
+        }
+    } else {
+        if m.get_flag("json") {
+            println!(
+                "{{\"title\":{},\"description\":{},\"creator\":{},\"created\":{},\"software\":{},\"copyright\":{},\"custom_entries\":{}}}",
+                json_escape_option(&decoded.metadata.title),
+                json_escape_option(&decoded.metadata.description),
+                json_escape_option(&decoded.metadata.creator),
+                json_escape_option(&decoded.metadata.created),
+                json_escape_option(&decoded.metadata.software),
+                json_escape_option(&decoded.metadata.copyright),
+                decoded.metadata.custom.len()
+            );
+        } else {
+            println!("Image Metadata");
+            if let Some(t) = &decoded.metadata.title { println!("  Title:       {t}"); }
+            if let Some(d) = &decoded.metadata.description { println!("  Description: {d}"); }
+            if let Some(c) = &decoded.metadata.creator { println!("  Creator:     {c}"); }
+            if let Some(c) = &decoded.metadata.created { println!("  Created:     {c}"); }
+            if let Some(s) = &decoded.metadata.software { println!("  Software:    {s}"); }
+            if let Some(c) = &decoded.metadata.copyright { println!("  Copyright:   {c}"); }
+            if !decoded.metadata.custom.is_empty() {
+                println!("  Custom ({} entries):", decoded.metadata.custom.len());
+                for (k, v) in &decoded.metadata.custom {
+                    println!("    {k}: {v}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn json_escape_option(s: &Option<String>) -> String {
+    match s {
+        Some(v) => format!("\"{}\"", json_escape(v)),
+        None => "null".to_string(),
+    }
+}
+
+fn cmd_image_info(m: &ArgMatches) -> Result<(), String> {
+    let path = m.get_one::<String>("file").unwrap();
+    let raw = fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+
+    let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
+        .map_err(|e| e.to_string())?;
+    if hdr.format_id() != FormatId::ZIMG {
+        return Err(format!("not a ZIMG image (format id {:#010x})", hdr.format_id().raw()));
+    }
+    let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
+
+    let opts = DecodeOptions {
+        password,
+        verify_integrity: true,
+        ..DecodeOptions::default()
+    };
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"format\":\"ZIMG\",\"version\":\"{}.{}\",\"file_size\":{},\"width\":{},\"height\":{},\"total_pixels\":{},\"color_model\":\"{:?}\",\"bit_depth\":{},\"channels\":{},\"color_space\":\"{:?}\",\"encrypted\":{},\"integrity_verified\":{}}}",
+            znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1,
+            raw.len(),
+            decoded.image.width, decoded.image.height, decoded.image.total_pixels(),
+            decoded.image.pixel_format.color_model,
+            decoded.image.pixel_format.bit_depth as u32,
+            decoded.image.pixel_format.channel_count,
+            decoded.image.pixel_format.color_space,
+            decoded.encrypted, decoded.integrity_verified
+        );
+    } else {
+        println!("ZIMG Image Information");
+        println!("  File:            {path} ({} bytes)", raw.len());
+        println!("  Format:          ZIMG v{}.{}", znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1);
+        println!("  Dimensions:      {} x {}", decoded.image.width, decoded.image.height);
+        println!("  Total pixels:    {}", decoded.image.total_pixels());
+        println!(
+            "  Color model:     {:?} ({} channels)",
+            decoded.image.pixel_format.color_model,
+            decoded.image.pixel_format.channel_count
+        );
+        println!(
+            "  Bit depth:       {:?}-bit per sample",
+            decoded.image.pixel_format.bit_depth
+        );
+        println!(
+            "  Alpha:           {:?}",
+            decoded.image.pixel_format.alpha
+        );
+        println!(
+            "  Color space:     {:?}",
+            decoded.image.pixel_format.color_space
+        );
+        println!(
+            "  Row stride:      {} bytes",
+            decoded.image.stride
+        );
+        println!("  Data bytes:      {}", decoded.image.data.len());
+        println!("  Encrypted:       {}", decoded.encrypted);
+        println!("  Integrity:       {}", decoded.integrity_verified);
+    }
+    Ok(())
+}
+
+fn cmd_image_optimize(m: &ArgMatches) -> Result<(), String> {
+    let input_path = m.get_one::<String>("input").unwrap();
+    let output_path = m.get_one::<String>("output").unwrap();
+    let raw = fs::read(input_path).map_err(|e| format!("failed to read '{input_path}': {e}"))?;
+
+    let password = resolve_password(m, false, false)?;
+    let opts = DecodeOptions {
+        password,
+        verify_integrity: true,
+        ..DecodeOptions::default()
+    };
+    let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
+
+    if !decoded.integrity_verified {
+        return Err("source image failed integrity verification; refusing to optimize".into());
+    }
+
+    let algo_str = m.get_one::<String>("compression").unwrap().as_str();
+    let level: i32 = m
+        .get_one::<String>("level")
+        .unwrap()
+        .parse()
+        .map_err(|_| "invalid compression level (expected integer 1..22)".to_string())?;
+    let compression = match algo_str {
+        "zstd" => znf_compression::Config::zstd(level),
+        "lz4" => znf_compression::Config::lz4(),
+        "store" | "none" => znf_compression::Config::stored(),
+        other => {
+            return Err(format!(
+                "unsupported compression '{other}' (expected zstd, lz4, or store)"
+            ))
+        }
+    };
+
+    let overwrite = m.get_flag("overwrite");
+    let output = std::path::Path::new(output_path);
+    if output.exists() && !overwrite {
+        return Err(format!(
+            "output file already exists (pass --overwrite to replace): {}",
+            output.display()
+        ));
+    }
+
+    let opts2 = EncodeOptions {
+        compression,
+        filter: FilterType::None,
+        password: decoded.encrypted.then_some(password.unwrap_or_default()).flatten(),
+        kdf_params: None,
+        chunk_strategy: ChunkStrategy::default(),
+        include_integrity: true,
+    };
+    let encoded = encode_image(&decoded.image, &opts2).map_err(|e| e.to_string())?;
+
+    fs::write(output, &encoded.bytes)
+        .map_err(|e| format!("failed to write '{output_path}': {e}"))?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"status\":\"optimized\",\"input_bytes\":{},\"output_bytes\":{},\"stored_bytes\":{},\"ratio\":{:.4}}}",
+            raw.len(), encoded.bytes.len(), encoded.info.stored_len,
+            raw.len() as f64 / encoded.bytes.len() as f64
+        );
+    } else {
+        println!("optimized {} -> {} ({} bytes stored)", input_path, output.display(), encoded.info.stored_len);
+    }
+    Ok(())
+}
+
+const znf_img::ZIMG_SPEC_VERSION: (u16, u16) = (1, 0);

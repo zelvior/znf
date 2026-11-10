@@ -50,6 +50,8 @@ impl FormatId {
     pub const ZARC: FormatId = FormatId(1);
     /// Generic ZNF Core container (`.znf`).
     pub const CORE: FormatId = FormatId(2);
+    /// ZIMG (`.zimg`) image format.
+    pub const ZIMG: FormatId = FormatId(3);
     /// Upper bound of standard ZNF format IDs.
     pub const RESERVED_MAX: FormatId = FormatId(0x7FFF_FFFF);
 
@@ -70,7 +72,7 @@ impl FormatId {
     /// Whether this is a recognized standard ZNF format (`ZARC` or `CORE`).
     #[must_use]
     pub const fn is_known(self) -> bool {
-        matches!(self, FormatId::ZARC | FormatId::CORE)
+        matches!(self, FormatId::ZARC | FormatId::CORE | FormatId::ZIMG)
     }
 }
 
