@@ -114,3 +114,79 @@ When `Flags::ENCRYPTED` is set:
 | `0x0101` | `TLV_ZARC_ENCRYPTED_INDEX` | `24B nonce || XChaCha20-Poly1305(index, aad=header[0..64])` |
 | `0x0102` | `TLV_ARCHIVE_BLAKE3` | 32-byte BLAKE3 digest over `file[0 .. payload_offset + payload_len]` |
 | `0x0103` | `TLV_PARITY_STRIPE` | Optional `znf-recovery` XOR parity stripe over the Payload Section |
+
+---
+
+## 8. Encrypted Metadata TLVs
+
+| Type | Name | Description |
+|---|---|---|
+| `0x0200` | `TLV_ZARC_ENCRYPTED_METADATA` | Encrypted comment / user metadata (`24B nonce || XChaCha20-Poly1305(plaintext, aad=header[0..64])`) |
+
+When `Flags::ENCRYPTED` is set, `TLV_COMMENT` must not appear in the metadata section; instead, comment and other sensitive metadata are placed in `TLV_ZARC_ENCRYPTED_METADATA`.
+
+---
+
+## 9. Entry-Level Flags
+
+| Bit | Name | Value | Description |
+|---:|---|---:|---|
+| `0` | `ENTRY_FLAG_ENCRYPTED` | `1 << 0` | Entry payload is encrypted |
+| `1` | `ENTRY_FLAG_HAS_USER_METADATA` | `1 << 1` | Entry has user-defined key-value metadata |
+
+---
+
+## 10. Error Handling
+
+All public API functions return `Result<T, ZarcError>`. Key error variants:
+
+| Variant | Meaning |
+|---|---|
+| `ZarcError::NotZarcFormat(id)` | File has a valid ZNF header but wrong `FormatId` |
+| `ZarcError::MalformedArchive(msg)` | Archive structure violates the specification |
+| `ZarcError::DuplicateEntry(path)` | Two entries share the same canonical path |
+| `ZarcError::CaseInsensitiveCollision { first, second }` | Paths collide case-insensitively |
+| `ZarcError::EntryNotFound(path)` | Requested entry does not exist |
+| `ZarcError::TargetAlreadyExists(path)` | Output file already exists, `overwrite` not set |
+| `ZarcError::SourceFileChanged(path)` | Source file mutated during archiving |
+| `ZarcError::UnsupportedFsEntry(msg)` | Symlink/device file where disallowed |
+| `ZarcError::SymlinkNotAllowed(msg)` | Symlink explicitly encountered and refused |
+| `ZarcError::ResourceLimitExceeded(msg)` | Bomb-protection limit exceeded |
+| `ZarcError::Cancelled` | Operation aborted by caller via cancellation token |
+
+---
+
+## 11. Public API Reference
+
+| Function/Method | Description |
+|---|---|
+| `ZarcWriter::new(opts)` | Create a new archive writer |
+| `writer.add_bytes(path, data, mode, mtime)` | Add an in-memory file entry |
+| `writer.add_path(base_dir, fs_path)` | Add a file from the filesystem |
+| `writer.finish(buf)` | Finalize archive into a `Vec<u8>` |
+| `writer.finish_to_path(path, progress, cancel)` | Atomically write archive to filesystem |
+| `ZarcArchive::open(raw, opts)` | Open and validate a `.zarc` archive |
+| `arch.verify_all()` | Verify all entry hashes and archive BLAKE3 |
+| `arch.extract_to(dest)` | Extract all entries to a directory |
+| `arch.extract_with_options(dest, opts, progress, cancel)` | Extract with fine-grained control |
+| `arch.find_entry(path)` | Look up an entry by canonical path |
+| `arch.diagnose_entries()` | Per-entry integrity diagnosis |
+| `arch.extract_verified_entries(dest, opts)` | Extract only verified-intact entries |
+| `inspect_archive(raw, password, limits)` | Read metadata without full validation |
+| `add_paths_to_archive_file(path, inputs, password)` | Add files to an existing `.zarc` |
+| `remove_entries_from_archive_file(path, paths, password)` | Remove entries from an existing `.zarc` |
+
+---
+
+## 12. Compliance & Conformance
+
+Implementations of this specification must:
+
+- Reject headers with unknown critical feature flags (`ZnfError::InvalidFlags`)
+- Reject archives with unsupported `FormatId` values
+- Validate all entry paths against canonical path rules before extraction
+- Refuse to archive or extract symlinks by default
+- Enforce `max_expanded_len` and `max_compression_ratio` resource limits
+- Verify per-entry BLAKE3 hashes on `verify_all()`
+- Verify whole-archive BLAKE3 digest on `verify_all()`
+- Use atomic temp-file + rename for `finish_to_path` to prevent partial writes

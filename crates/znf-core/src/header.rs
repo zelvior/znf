@@ -264,6 +264,21 @@ impl ZnfHeader {
         &mut self.flags
     }
 
+    /// Set feature flags and return self for builder chaining.
+    #[must_use]
+    pub fn with_flags(mut self, flags: Flags) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    /// Set payload offset and length and return self for builder chaining.
+    #[must_use]
+    pub fn with_payload_span(mut self, offset: u64, len: u64) -> Self {
+        self.payload_offset = offset;
+        self.payload_len = len;
+        self
+    }
+
     /// Container-level compression identifier.
     #[must_use]
     pub const fn compression(&self) -> ZnfCompression {
