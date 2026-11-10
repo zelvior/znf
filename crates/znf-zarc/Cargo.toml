@@ -1,0 +1,23 @@
+[package]
+name = "znf-zarc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZARC (.zarc) archive container format built on ZNF Core"
+
+[dependencies]
+thiserror.workspace = true
+znf-core = { path = "../znf-core" }
+znf-compression = { path = "../znf-compression" }
+znf-crypto = { path = "../znf-crypto" }
+znf-integrity = { path = "../znf-integrity" }
+znf-stream = { path = "../znf-stream" }
+znf-recovery = { path = "../znf-recovery" }
+
+[lib]
+name = "znf_zarc"
+path = "src/lib.rs"

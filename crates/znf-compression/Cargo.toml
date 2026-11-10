@@ -1,0 +1,19 @@
+[package]
+name = "znf-compression"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZNF compression: streaming Zstandard, LZ4, and stored (lossless only)"
+
+[dependencies]
+thiserror.workspace = true
+zstd.workspace = true
+lz4_flex.workspace = true
+
+[lib]
+name = "znf_compression"
+path = "src/lib.rs"

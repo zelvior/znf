@@ -1,0 +1,17 @@
+[package]
+name = "znf-stream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZNF streaming I/O: bounded-memory chunk framing and pipeline adapters"
+
+[dependencies]
+thiserror.workspace = true
+
+[lib]
+name = "znf_stream"
+path = "src/lib.rs"

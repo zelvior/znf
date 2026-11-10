@@ -1,0 +1,19 @@
+[package]
+name = "znf-recovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZNF recovery: block parity and corruption scanning"
+
+[dependencies]
+thiserror.workspace = true
+znf-core = { path = "../znf-core" }
+znf-integrity = { path = "../znf-integrity" }
+
+[lib]
+name = "znf_recovery"
+path = "src/lib.rs"

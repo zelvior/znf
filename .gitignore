@@ -1,0 +1,25 @@
+# Rust
+/target/
+**/target/
+Cargo.lock
+*.rs.bk
+*.pdb
+
+# Local cargo config (vendor source replacement for offline builds)
+.cargo/config.toml
+.cargo/config
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.zarc
+!tests/**/*.zarc

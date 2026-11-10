@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/znf-core",
+    "crates/znf-compression",
+    "crates/znf-crypto",
+    "crates/znf-integrity",
+    "crates/znf-stream",
+    "crates/znf-recovery",
+    "crates/znf-zarc",
+    "apps/znf-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/zelvior/znf"
+homepage = "https://github.com/zelvior/znf"
+readme = "README.md"
+rust-version = "1.87"
+
+[workspace.dependencies]
+thiserror = "2"
+zstd = "0.14"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
+chacha20poly1305 = "0.11"
+argon2 = "0.6"
+getrandom = "0.4"
+zeroize = "1"
+blake3 = "1"
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
+rpassword = "7"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+debug = 1
