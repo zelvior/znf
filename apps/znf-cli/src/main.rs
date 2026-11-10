@@ -1,7 +1,8 @@
-//! `znf` — Command-line tool for ZNF Core containers and `.zarc` archives.
+//! `znf` — Command-line tool for ZNF Core containers and ZARC (`.zarc`) archives.
 //!
 //! Zero telemetry, zero network calls, deterministic binary output.
-//! Diagnostic output never exposes secret keys, passwords, or sensitive metadata values.
+//! Passwords are read from interactive hidden terminal prompts (`rpassword`) or
+//! `--password-env`, never from command-line arguments, and secrets are never logged.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -18,11 +19,240 @@ use znf_core::{
     CORE_SPEC_VERSION, HEADER_LEN,
 };
 use znf_zarc::{
-    attempt_parity_repair, EntryKind, ReadOptions, WriteOptions, ZarcArchive, ZarcError,
-    ZarcWriter, ZARC_SPEC_VERSION,
+    add_paths_to_archive_file, attempt_parity_repair, inspect_archive,
+    remove_entries_from_archive_file, ArchiveProgress, EntryKind, ExtractOptions, ReadOptions,
+    WriteOptions, ZarcArchive, ZarcError, ZarcWriter, ZARC_SPEC_VERSION,
 };
 
 const VERSION_STR: &str = env!("CARGO_PKG_VERSION");
+
+fn common_password_arg() -> Arg {
+    Arg::new("password-env")
+        .long("password-env")
+        .value_name("ENV_VAR")
+        .help("Read encryption/decryption password from environment variable")
+}
+
+fn common_json_arg() -> Arg {
+    Arg::new("json")
+        .long("json")
+        .action(ArgAction::SetTrue)
+        .help("Emit machine-readable JSON output")
+}
+
+fn common_progress_arg() -> Arg {
+    Arg::new("progress")
+        .long("progress")
+        .action(ArgAction::SetTrue)
+        .help("Display per-entry progress to stderr")
+}
+
+fn zarc_create_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Create a new .zarc archive from files or directories")
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .value_name("ARCHIVE.zarc")
+                .help("Output .zarc file path (if omitted, first positional argument is used)"),
+        )
+        .arg(
+            Arg::new("compression")
+                .short('c')
+                .long("compression")
+                .value_name("ALGO")
+                .default_value("zstd")
+                .help("Compression algorithm: zstd, lz4, or store"),
+        )
+        .arg(
+            Arg::new("level")
+                .short('l')
+                .long("level")
+                .value_name("1..22")
+                .default_value("3")
+                .help("Zstandard compression level (1..22)"),
+        )
+        .arg(
+            Arg::new("encrypt")
+                .short('e')
+                .long("encrypt")
+                .action(ArgAction::SetTrue)
+                .help("Encrypt archive with XChaCha20-Poly1305 + Argon2id"),
+        )
+        .arg(common_password_arg())
+        .arg(
+            Arg::new("parity")
+                .long("parity")
+                .action(ArgAction::SetTrue)
+                .help("Include XOR recovery parity stripe in archive footer"),
+        )
+        .arg(
+            Arg::new("comment")
+                .long("comment")
+                .value_name("TEXT")
+                .help("Optional UTF-8 comment stored in archive metadata"),
+        )
+        .arg(
+            Arg::new("overwrite")
+                .short('f')
+                .long("overwrite")
+                .action(ArgAction::SetTrue)
+                .help("Allow overwriting an existing output .zarc file"),
+        )
+        .arg(common_progress_arg())
+        .arg(common_json_arg())
+        .arg(
+            Arg::new("inputs")
+                .value_name("PATH")
+                .num_args(1..)
+                .required(true)
+                .help("Archive path (if -o not used) followed by input files/directories"),
+        )
+}
+
+fn zarc_extract_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Safely extract a .zarc archive into a destination directory")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to .zarc archive"),
+        )
+        .arg(
+            Arg::new("dest")
+                .short('d')
+                .long("dest")
+                .visible_alias("output")
+                .short_alias('o')
+                .value_name("DIR")
+                .default_value(".")
+                .help("Destination directory"),
+        )
+        .arg(
+            Arg::new("select")
+                .long("select")
+                .value_name("ENTRY_PATH")
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .help("Extract only the specified archive entry path(s) or directory subtree(s)"),
+        )
+        .arg(
+            Arg::new("overwrite")
+                .short('f')
+                .long("overwrite")
+                .action(ArgAction::SetTrue)
+                .help("Allow overwriting existing files in the destination directory"),
+        )
+        .arg(
+            Arg::new("recover-intact")
+                .long("recover-intact")
+                .action(ArgAction::SetTrue)
+                .help("Extract independently verified intact entries even if other entries are damaged"),
+        )
+        .arg(common_password_arg())
+        .arg(common_progress_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_list_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("List entries in a .zarc archive")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to .zarc archive"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_verify_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Verify header, BLAKE3 hashes, AEAD tags, and optional parity")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to .zarc archive"),
+        )
+        .arg(
+            Arg::new("repair-out")
+                .long("repair-out")
+                .value_name("REPAIRED.zarc")
+                .help("Attempt single-block parity repair and write repaired archive"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_test_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Test every entry in a .zarc archive and report per-entry health")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to .zarc archive"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_info_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Display detailed ZNF Core header and .zarc container metadata")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to .zarc archive"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_add_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Add files or directories to an existing .zarc archive")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to existing .zarc archive"),
+        )
+        .arg(
+            Arg::new("inputs")
+                .value_name("PATH")
+                .num_args(1..)
+                .required(true)
+                .help("Files or directories to add"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
+
+fn zarc_remove_command(name: &'static str) -> Command {
+    Command::new(name)
+        .about("Remove entry path(s) from an existing .zarc archive")
+        .arg(
+            Arg::new("archive")
+                .value_name("ARCHIVE.zarc")
+                .required(true)
+                .help("Path to existing .zarc archive"),
+        )
+        .arg(
+            Arg::new("paths")
+                .value_name("ENTRY_PATH")
+                .num_args(1..)
+                .required(true)
+                .help("Canonical entry path(s) or directory subtree(s) to remove"),
+        )
+        .arg(common_password_arg())
+        .arg(common_json_arg())
+}
 
 fn build_cli() -> Command {
     Command::new("znf")
@@ -30,15 +260,26 @@ fn build_cli() -> Command {
         .about("Zelvior Native Format (ZNF) Core & ZARC (.zarc) CLI")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        // Top-level ergonomic commands (`znf create|extract|list|inspect|validate|verify|test|add|remove|info`)
+        .subcommand(zarc_create_command("create"))
+        .subcommand(zarc_extract_command("extract"))
+        .subcommand(zarc_list_command("list"))
+        .subcommand(zarc_verify_command("verify"))
+        .subcommand(zarc_test_command("test"))
+        .subcommand(zarc_add_command("add"))
+        .subcommand(zarc_remove_command("remove"))
+        .subcommand(zarc_info_command("info"))
         .subcommand(
             Command::new("inspect")
-                .about("Inspect any ZNF container header, version, flags, compression, encryption, and integrity")
+                .about("Inspect any ZNF or .zarc container without extracting files")
                 .arg(
                     Arg::new("file")
                         .value_name("CONTAINER")
                         .required(true)
-                        .help("Path to ZNF container (.znf, .zarc, etc.)"),
-                ),
+                        .help("Path to ZNF container (.zarc, .znf)"),
+                )
+                .arg(common_password_arg())
+                .arg(common_json_arg()),
         )
         .subcommand(
             Command::new("validate")
@@ -48,7 +289,8 @@ fn build_cli() -> Command {
                         .value_name("CONTAINER")
                         .required(true)
                         .help("Path to ZNF container"),
-                ),
+                )
+                .arg(common_json_arg()),
         )
         .subcommand(
             Command::new("container")
@@ -103,12 +345,7 @@ fn build_cli() -> Command {
                                 .action(ArgAction::SetTrue)
                                 .help("Encrypt payload with XChaCha20-Poly1305 + Argon2id"),
                         )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read encryption password from environment variable"),
-                        )
+                        .arg(common_password_arg())
                         .arg(
                             Arg::new("comment")
                                 .long("comment")
@@ -135,12 +372,7 @@ fn build_cli() -> Command {
                                 .required(true)
                                 .help("Output payload path"),
                         )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
+                        .arg(common_password_arg()),
                 )
                 .subcommand(
                     Command::new("verify")
@@ -151,12 +383,7 @@ fn build_cli() -> Command {
                                 .required(true)
                                 .help("Path to .znf container"),
                         )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
+                        .arg(common_password_arg()),
                 )
                 .subcommand(
                     Command::new("inspect")
@@ -166,7 +393,9 @@ fn build_cli() -> Command {
                                 .value_name("CONTAINER")
                                 .required(true)
                                 .help("Path to ZNF container"),
-                        ),
+                        )
+                        .arg(common_password_arg())
+                        .arg(common_json_arg()),
                 )
                 .subcommand(
                     Command::new("validate")
@@ -176,151 +405,34 @@ fn build_cli() -> Command {
                                 .value_name("CONTAINER")
                                 .required(true)
                                 .help("Path to ZNF container"),
-                        ),
+                        )
+                        .arg(common_json_arg()),
                 ),
         )
         .subcommand(
             Command::new("zarc")
-                .about("Create, inspect, verify, and extract .zarc archives")
+                .about("Create, inspect, verify, modify, and extract .zarc archives")
                 .subcommand_required(true)
                 .arg_required_else_help(true)
+                .subcommand(zarc_create_command("create"))
+                .subcommand(zarc_list_command("list"))
+                .subcommand(zarc_extract_command("extract"))
+                .subcommand(zarc_verify_command("verify"))
+                .subcommand(zarc_test_command("test"))
+                .subcommand(zarc_add_command("add"))
+                .subcommand(zarc_remove_command("remove"))
+                .subcommand(zarc_info_command("info"))
                 .subcommand(
-                    Command::new("create")
-                        .about("Create a new .zarc archive from files or directories")
+                    Command::new("inspect")
+                        .about("Inspect a .zarc archive without extracting files")
                         .arg(
-                            Arg::new("output")
-                                .short('o')
-                                .long("output")
-                                .value_name("ARCHIVE.zarc")
-                                .help("Output .zarc file path")
-                                .required(true),
-                        )
-                        .arg(
-                            Arg::new("compression")
-                                .short('c')
-                                .long("compression")
-                                .value_name("ALGO")
-                                .default_value("zstd")
-                                .help("Compression algorithm: zstd, lz4, or store"),
-                        )
-                        .arg(
-                            Arg::new("level")
-                                .short('l')
-                                .long("level")
-                                .value_name("1..22")
-                                .default_value("3")
-                                .help("Zstandard compression level (1..22)"),
-                        )
-                        .arg(
-                            Arg::new("encrypt")
-                                .short('e')
-                                .long("encrypt")
-                                .action(ArgAction::SetTrue)
-                                .help("Encrypt archive with XChaCha20-Poly1305 + Argon2id"),
-                        )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read encryption password from environment variable (non-interactive)"),
-                        )
-                        .arg(
-                            Arg::new("parity")
-                                .long("parity")
-                                .action(ArgAction::SetTrue)
-                                .help("Include XOR recovery parity stripe in archive footer"),
-                        )
-                        .arg(
-                            Arg::new("comment")
-                                .long("comment")
-                                .value_name("TEXT")
-                                .help("Optional UTF-8 comment stored in archive metadata"),
-                        )
-                        .arg(
-                            Arg::new("inputs")
-                                .value_name("PATH")
-                                .num_args(1..)
-                                .required(true)
-                                .help("Input files or directories to archive"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("list")
-                        .about("List entries in a .zarc archive")
-                        .arg(
-                            Arg::new("archive")
+                            Arg::new("file")
                                 .value_name("ARCHIVE.zarc")
                                 .required(true)
                                 .help("Path to .zarc archive"),
                         )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("extract")
-                        .about("Safely extract a .zarc archive into a destination directory")
-                        .arg(
-                            Arg::new("archive")
-                                .value_name("ARCHIVE.zarc")
-                                .required(true)
-                                .help("Path to .zarc archive"),
-                        )
-                        .arg(
-                            Arg::new("dest")
-                                .short('d')
-                                .long("dest")
-                                .value_name("DIR")
-                                .default_value(".")
-                                .help("Destination directory"),
-                        )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("verify")
-                        .about("Verify header, BLAKE3 hashes, AEAD tags, and optional parity")
-                        .arg(
-                            Arg::new("archive")
-                                .value_name("ARCHIVE.zarc")
-                                .required(true)
-                                .help("Path to .zarc archive"),
-                        )
-                        .arg(
-                            Arg::new("repair-out")
-                                .long("repair-out")
-                                .value_name("REPAIRED.zarc")
-                                .help("Attempt single-block parity repair and write repaired archive"),
-                        )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("info")
-                        .about("Display detailed ZNF Core header and .zarc container metadata")
-                        .arg(
-                            Arg::new("archive")
-                                .value_name("ARCHIVE.zarc")
-                                .required(true)
-                                .help("Path to .zarc archive"),
-                        )
-                        .arg(
-                            Arg::new("password-env")
-                                .long("password-env")
-                                .value_name("ENV_VAR")
-                                .help("Read decryption password from environment variable"),
-                        ),
+                        .arg(common_password_arg())
+                        .arg(common_json_arg()),
                 ),
         )
 }
@@ -338,13 +450,21 @@ fn main() -> ExitCode {
 
 fn run(matches: &ArgMatches) -> Result<(), String> {
     match matches.subcommand() {
-        Some(("inspect", m)) => cmd_container_inspect(m),
+        Some(("create", m)) => cmd_create(m),
+        Some(("extract", m)) => cmd_extract(m),
+        Some(("list", m)) => cmd_list(m),
+        Some(("verify", m)) => cmd_verify(m),
+        Some(("test", m)) => cmd_test(m),
+        Some(("add", m)) => cmd_add(m),
+        Some(("remove", m)) => cmd_remove(m),
+        Some(("info", m)) => cmd_info(m),
+        Some(("inspect", m)) => cmd_inspect_any(m),
         Some(("validate", m)) => cmd_container_validate(m),
         Some(("container", cm)) => match cm.subcommand() {
             Some(("pack", m)) => cmd_container_pack(m),
             Some(("unpack", m)) => cmd_container_unpack(m),
             Some(("verify", m)) => cmd_container_verify(m),
-            Some(("inspect", m)) => cmd_container_inspect(m),
+            Some(("inspect", m)) => cmd_inspect_any(m),
             Some(("validate", m)) => cmd_container_validate(m),
             _ => Err("unknown container subcommand".into()),
         },
@@ -353,11 +473,31 @@ fn run(matches: &ArgMatches) -> Result<(), String> {
             Some(("list", m)) => cmd_list(m),
             Some(("extract", m)) => cmd_extract(m),
             Some(("verify", m)) => cmd_verify(m),
+            Some(("test", m)) => cmd_test(m),
+            Some(("add", m)) => cmd_add(m),
+            Some(("remove", m)) => cmd_remove(m),
             Some(("info", m)) => cmd_info(m),
+            Some(("inspect", m)) => cmd_inspect_any(m),
             _ => Err("unknown zarc subcommand".into()),
         },
         _ => Err("unknown subcommand".into()),
     }
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn resolve_password(
@@ -399,9 +539,102 @@ fn format_name(fid: FormatId) -> &'static str {
     }
 }
 
-fn cmd_container_inspect(m: &ArgMatches) -> Result<(), String> {
+fn cmd_inspect_any(m: &ArgMatches) -> Result<(), String> {
     let path = m.get_one::<String>("file").unwrap();
     let raw = fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+    let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
+        .map_err(|e| {
+            if e.is_unsupported() {
+                format!("unsupported container feature/version: {e}")
+            } else {
+                format!("container header validation failed: {e}")
+            }
+        })?;
+
+    // If this is a ZARC archive, use the rich ZARC inspector (supports locked & unlocked).
+    if hdr.format_id() == FormatId::ZARC {
+        let pw = resolve_password(m, false, false)?;
+        let insp =
+            inspect_archive(&raw, pw, &znf_core::Limits::default()).map_err(|e| e.to_string())?;
+        if m.get_flag("json") {
+            let entries_count = insp.entries.len();
+            let (u_bytes, s_bytes) = insp.stats.as_ref().map_or((0, 0), |st| {
+                (st.total_uncompressed_bytes, st.total_stored_bytes)
+            });
+            println!(
+                "{{\"format\":\"ZARC\",\"version\":\"{}.{}\",\"file_size\":{},\"encrypted\":{},\"index_locked\":{},\"compression\":\"{:?}\",\"entries\":{},\"uncompressed_bytes\":{},\"stored_bytes\":{},\"blake3_verified\":{}}}",
+                insp.version.0,
+                insp.version.1,
+                insp.file_size,
+                insp.flags.is_encrypted(),
+                insp.index_locked,
+                insp.header_compression,
+                entries_count,
+                u_bytes,
+                s_bytes,
+                insp.archive_blake3_verified
+            );
+            return Ok(());
+        }
+        println!("ZNF Container Diagnostic Inspection");
+        println!("  File:                {path} ({} bytes)", insp.file_size);
+        println!("  Format ID:           0x00000001 (ZARC (.zarc))");
+        println!(
+            "  Format Version:      {}.{}",
+            insp.version.0, insp.version.1
+        );
+        println!(
+            "  Feature Flags:       {:#018x} [compressed={}, encrypted={}, metadata={}, footer={}]",
+            insp.flags.bits(),
+            insp.flags.is_compressed(),
+            insp.flags.is_encrypted(),
+            insp.flags.has_metadata(),
+            insp.flags.has_footer()
+        );
+        println!("  Compression:         {:?}", insp.header_compression);
+        println!("  Encryption:          {:?}", insp.header_encryption);
+        println!("  Payload Offset:      {}", insp.payload_offset);
+        println!("  Stored Payload Len:  {} bytes", insp.payload_len);
+        if let Some(b3) = insp.archive_blake3 {
+            println!(
+                "  Archive BLAKE3:      {} (verified={})",
+                b3.to_hex(),
+                insp.archive_blake3_verified
+            );
+        }
+        println!(
+            "  Parity Stripe:       {}",
+            if insp.has_parity_stripe {
+                "present"
+            } else {
+                "none"
+            }
+        );
+        if insp.index_locked {
+            println!("  Index Status:        ENCRYPTED (supply password to list entries)");
+        } else if let Some(ref st) = insp.stats {
+            println!(
+                "  Entries:             {} ({} files, {} dirs; zstd={}, lz4={}, store={})",
+                st.total_entries,
+                st.file_count,
+                st.dir_count,
+                st.zstd_files,
+                st.lz4_files,
+                st.stored_files
+            );
+            println!(
+                "  Uncompressed Sum:    {} bytes",
+                st.total_uncompressed_bytes
+            );
+            println!("  Stored Sum:          {} bytes", st.total_stored_bytes);
+            println!("  Compression Ratio:   {:.2}:1", st.ratio());
+        }
+        for w in &insp.warnings {
+            println!("  Warning:             {w}");
+        }
+        return Ok(());
+    }
+
     let info = ZnfValidator::new().validate_structure(&raw).map_err(|e| {
         if e.is_unsupported() {
             format!("unsupported container feature/version: {e}")
@@ -409,6 +642,19 @@ fn cmd_container_inspect(m: &ArgMatches) -> Result<(), String> {
             format!("container validation failed: {e}")
         }
     })?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"format\":\"{}\",\"version\":\"{}.{}\",\"compression\":\"{:?}\",\"encryption\":\"{:?}\",\"payload_len\":{}}}",
+            json_escape(format_name(info.format_id)),
+            info.version.major,
+            info.version.minor,
+            info.compression,
+            info.encryption,
+            info.payload_len
+        );
+        return Ok(());
+    }
 
     println!("ZNF Container Diagnostic Inspection");
     println!("  File:                {path} ({} bytes)", raw.len());
@@ -465,15 +711,25 @@ fn cmd_container_validate(m: &ArgMatches) -> Result<(), String> {
             format!("validation failed: {e}")
         }
     })?;
-    println!(
-        "VALID: {} v{}.{} (compression={:?}, encrypted={}, payload={} bytes)",
-        format_name(info.format_id),
-        info.version.major,
-        info.version.minor,
-        info.compression,
-        info.flags.is_encrypted(),
-        info.payload_len
-    );
+    if m.get_flag("json") {
+        println!(
+            "{{\"valid\":true,\"format\":\"{}\",\"version\":\"{}.{}\",\"payload_len\":{}}}",
+            json_escape(format_name(info.format_id)),
+            info.version.major,
+            info.version.minor,
+            info.payload_len
+        );
+    } else {
+        println!(
+            "VALID: {} v{}.{} (compression={:?}, encrypted={}, payload={} bytes)",
+            format_name(info.format_id),
+            info.version.major,
+            info.version.minor,
+            info.compression,
+            info.flags.is_encrypted(),
+            info.payload_len
+        );
+    }
     Ok(())
 }
 
@@ -579,7 +835,19 @@ fn cmd_container_verify(m: &ArgMatches) -> Result<(), String> {
 }
 
 fn cmd_create(m: &ArgMatches) -> Result<(), String> {
-    let output = PathBuf::from(m.get_one::<String>("output").unwrap());
+    let raw_inputs: Vec<&String> = m.get_many::<String>("inputs").unwrap().collect();
+    let (output, inputs): (PathBuf, &[&String]) =
+        if let Some(out_flag) = m.get_one::<String>("output") {
+            (PathBuf::from(out_flag), &raw_inputs[..])
+        } else {
+            if raw_inputs.len() < 2 {
+                return Err(
+                    "usage: znf create <ARCHIVE.zarc> <PATH>... (or pass -o <ARCHIVE.zarc>)".into(),
+                );
+            }
+            (PathBuf::from(raw_inputs[0]), &raw_inputs[1..])
+        };
+
     let algo_str = m.get_one::<String>("compression").unwrap().as_str();
     let level: i32 = m
         .get_one::<String>("level")
@@ -601,6 +869,7 @@ fn cmd_create(m: &ArgMatches) -> Result<(), String> {
     let encrypt_flag = m.get_flag("encrypt") || m.contains_id("password-env");
     let password = resolve_password(m, encrypt_flag, true)?;
     let include_parity = m.get_flag("parity");
+    let overwrite = m.get_flag("overwrite");
     let comment = m.get_one::<String>("comment").cloned();
 
     let opts = WriteOptions {
@@ -609,12 +878,12 @@ fn cmd_create(m: &ArgMatches) -> Result<(), String> {
         kdf_params: None,
         comment,
         include_parity,
+        overwrite,
         ..WriteOptions::default()
     };
 
     let mut writer = ZarcWriter::new(opts);
-    let inputs: Vec<&String> = m.get_many::<String>("inputs").unwrap().collect();
-    for raw_in in inputs {
+    for &raw_in in inputs {
         let p = Path::new(raw_in);
         if !p.exists() {
             return Err(format!("input path does not exist: {}", p.display()));
@@ -625,12 +894,31 @@ fn cmd_create(m: &ArgMatches) -> Result<(), String> {
             .map_err(|e| format!("failed to add '{}': {e}", p.display()))?;
     }
 
-    let mut file = fs::File::create(&output)
-        .map_err(|e| format!("failed to create '{}': {e}", output.display()))?;
+    let show_progress = m.get_flag("progress");
+    let mut progress_cb = |ev: ArchiveProgress| {
+        if show_progress {
+            eprintln!(
+                "[{}/{}] {} ({} bytes processed)",
+                ev.entry_index + 1,
+                ev.total_entries,
+                ev.current_path,
+                ev.bytes_processed
+            );
+        }
+    };
+
     writer
-        .finish(&mut file)
-        .map_err(|e| format!("failed to finalize archive: {e}"))?;
-    println!("created {} (archive written)", output.display());
+        .finish_to_path(&output, Some(&mut progress_cb), None)
+        .map_err(|e| format!("failed to create archive: {e}"))?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"status\":\"created\",\"archive\":\"{}\"}}",
+            json_escape(&output.display().to_string())
+        );
+    } else {
+        println!("created {} (archive written)", output.display());
+    }
     Ok(())
 }
 
@@ -651,6 +939,35 @@ fn cmd_list(m: &ArgMatches) -> Result<(), String> {
     let raw =
         fs::read(archive_path).map_err(|e| format!("failed to read '{archive_path}': {e}"))?;
     let arch = open_archive_with_cli(&raw, m)?;
+
+    if m.get_flag("json") {
+        print!("[");
+        for (i, e) in arch.entries().iter().enumerate() {
+            if i > 0 {
+                print!(",");
+            }
+            let kind_str = match e.kind {
+                EntryKind::File => "file",
+                EntryKind::Directory => "dir",
+            };
+            let algo_str = match e.compression {
+                Algorithm::None => "store",
+                Algorithm::Zstd => "zstd",
+                Algorithm::Lz4 => "lz4",
+            };
+            print!(
+                "{{\"path\":\"{}\",\"kind\":\"{}\",\"compression\":\"{}\",\"uncompressed_size\":{},\"stored_size\":{},\"blake3\":\"{}\"}}",
+                json_escape(&e.path),
+                kind_str,
+                algo_str,
+                e.uncompressed_size,
+                e.stored_size,
+                e.blake3_hash.to_hex()
+            );
+        }
+        println!("]");
+        return Ok(());
+    }
 
     println!(
         "{:<5} {:<6} {:>12} {:>12}  PATH",
@@ -680,8 +997,65 @@ fn cmd_extract(m: &ArgMatches) -> Result<(), String> {
     let raw =
         fs::read(archive_path).map_err(|e| format!("failed to read '{archive_path}': {e}"))?;
     let arch = open_archive_with_cli(&raw, m)?;
-    let count = arch.extract_to(dest).map_err(|e| e.to_string())?;
-    println!("extracted {count} entries to {}", dest.display());
+
+    let selected_paths = m
+        .get_many::<String>("select")
+        .map(|vals| vals.cloned().collect::<Vec<String>>());
+    let extract_opts = ExtractOptions {
+        overwrite: m.get_flag("overwrite"),
+        selected_paths,
+        ..ExtractOptions::default()
+    };
+
+    if m.get_flag("recover-intact") {
+        let report = arch
+            .extract_verified_entries(dest, &extract_opts)
+            .map_err(|e| e.to_string())?;
+        if m.get_flag("json") {
+            println!(
+                "{{\"extracted\":{},\"failed\":{}}}",
+                report.extracted_paths.len(),
+                report.failed_entries.len()
+            );
+        } else {
+            println!(
+                "recovered {} verified entries to {} ({} damaged entries refused)",
+                report.extracted_paths.len(),
+                dest.display(),
+                report.failed_entries.len()
+            );
+            for (p, err) in &report.failed_entries {
+                eprintln!("  damaged: {p} ({err})");
+            }
+        }
+        return Ok(());
+    }
+
+    let show_progress = m.get_flag("progress");
+    let mut progress_cb = |ev: ArchiveProgress| {
+        if show_progress {
+            eprintln!(
+                "[{}/{}] {} ({} bytes)",
+                ev.entry_index + 1,
+                ev.total_entries,
+                ev.current_path,
+                ev.bytes_processed
+            );
+        }
+    };
+
+    let count = arch
+        .extract_with_options(dest, &extract_opts, Some(&mut progress_cb), None)
+        .map_err(|e| e.to_string())?;
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"status\":\"extracted\",\"count\":{count},\"dest\":\"{}\"}}",
+            json_escape(&dest.display().to_string())
+        );
+    } else {
+        println!("extracted {count} entries to {}", dest.display());
+    }
     Ok(())
 }
 
@@ -710,10 +1084,108 @@ fn cmd_verify(m: &ArgMatches) -> Result<(), String> {
 
     let arch = open_archive_with_cli(&raw, m)?;
     arch.verify_all().map_err(|e| e.to_string())?;
-    println!(
-        "OK: verified {} entries and container integrity ({archive_path})",
-        arch.entries().len()
-    );
+    if m.get_flag("json") {
+        println!(
+            "{{\"valid\":true,\"entries\":{},\"archive\":\"{}\"}}",
+            arch.entries().len(),
+            json_escape(archive_path)
+        );
+    } else {
+        println!(
+            "OK: verified {} entries and container integrity ({archive_path})",
+            arch.entries().len()
+        );
+    }
+    Ok(())
+}
+
+fn cmd_test(m: &ArgMatches) -> Result<(), String> {
+    let archive_path = m.get_one::<String>("archive").unwrap();
+    let raw =
+        fs::read(archive_path).map_err(|e| format!("failed to read '{archive_path}': {e}"))?;
+    let arch = open_archive_with_cli(&raw, m)?;
+    let diagnoses = arch.diagnose_entries();
+    let failed: Vec<_> = diagnoses.iter().filter(|d| !d.intact).collect();
+
+    if m.get_flag("json") {
+        println!(
+            "{{\"total\":{},\"intact\":{},\"damaged\":{}}}",
+            diagnoses.len(),
+            diagnoses.len() - failed.len(),
+            failed.len()
+        );
+    } else {
+        for d in &diagnoses {
+            if d.intact {
+                println!("  OK      {}", d.path);
+            } else {
+                println!(
+                    "  FAILED  {} ({})",
+                    d.path,
+                    d.error.as_deref().unwrap_or("corrupted")
+                );
+            }
+        }
+        println!(
+            "test summary: {}/{} entries intact",
+            diagnoses.len() - failed.len(),
+            diagnoses.len()
+        );
+    }
+
+    if !failed.is_empty() {
+        return Err(format!(
+            "{} entries failed integrity verification",
+            failed.len()
+        ));
+    }
+    Ok(())
+}
+
+fn cmd_add(m: &ArgMatches) -> Result<(), String> {
+    let archive_path = Path::new(m.get_one::<String>("archive").unwrap());
+    let raw = fs::read(archive_path)
+        .map_err(|e| format!("failed to read '{}': {e}", archive_path.display()))?;
+    let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
+        .map_err(|e| e.to_string())?;
+    let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
+
+    let input_strings: Vec<&String> = m.get_many::<String>("inputs").unwrap().collect();
+    let input_paths: Vec<&Path> = input_strings
+        .iter()
+        .map(|s| Path::new(s.as_str()))
+        .collect();
+
+    let total = add_paths_to_archive_file(archive_path, &input_paths, password)
+        .map_err(|e| e.to_string())?;
+    if m.get_flag("json") {
+        println!("{{\"status\":\"updated\",\"total_entries\":{total}}}");
+    } else {
+        println!(
+            "updated {} (total entries: {total})",
+            archive_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn cmd_remove(m: &ArgMatches) -> Result<(), String> {
+    let archive_path = Path::new(m.get_one::<String>("archive").unwrap());
+    let raw = fs::read(archive_path)
+        .map_err(|e| format!("failed to read '{}': {e}", archive_path.display()))?;
+    let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
+        .map_err(|e| e.to_string())?;
+    let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
+
+    let paths_to_remove: Vec<String> = m.get_many::<String>("paths").unwrap().cloned().collect();
+    let removed = remove_entries_from_archive_file(archive_path, &paths_to_remove, password)
+        .map_err(|e| e.to_string())?;
+
+    if m.get_flag("json") {
+        println!("{{\"status\":\"updated\",\"removed_entries\":{removed}}}");
+    } else {
+        println!("removed {removed} entries from {}", archive_path.display());
+    }
     Ok(())
 }
 
@@ -723,9 +1195,23 @@ fn cmd_info(m: &ArgMatches) -> Result<(), String> {
         fs::read(archive_path).map_err(|e| format!("failed to read '{archive_path}': {e}"))?;
     let arch = open_archive_with_cli(&raw, m)?;
     let h = arch.header();
+    let stats = arch.compression_stats();
 
-    let total_orig: u64 = arch.entries().iter().map(|e| e.uncompressed_size).sum();
-    let total_stored: u64 = arch.entries().iter().map(|e| e.stored_size).sum();
+    if m.get_flag("json") {
+        println!(
+            "{{\"file_size\":{},\"version\":\"{}.{}\",\"entries\":{},\"uncompressed_bytes\":{},\"stored_bytes\":{},\"ratio\":{:.4},\"encrypted\":{},\"parity\":{}}}",
+            raw.len(),
+            h.version().major,
+            h.version().minor,
+            stats.total_entries,
+            stats.total_uncompressed_bytes,
+            stats.total_stored_bytes,
+            stats.ratio(),
+            h.flags().is_encrypted(),
+            arch.parity_stripe().is_some()
+        );
+        return Ok(());
+    }
 
     println!("ZNF Container Information");
     println!("  File size:         {} bytes", raw.len());
@@ -756,9 +1242,20 @@ fn cmd_info(m: &ArgMatches) -> Result<(), String> {
     println!("  Encryption ID:     {:?}", h.encryption());
     println!("  Payload offset:    {}", h.payload_offset());
     println!("  Payload length:    {}", h.payload_len());
-    println!("  Entry count:       {}", arch.entries().len());
-    println!("  Uncompressed sum:  {total_orig} bytes");
-    println!("  Stored sum:        {total_stored} bytes");
+    println!(
+        "  Entry count:       {} ({} files, {} dirs)",
+        stats.total_entries, stats.file_count, stats.dir_count
+    );
+    println!(
+        "  Uncompressed sum:  {} bytes",
+        stats.total_uncompressed_bytes
+    );
+    println!("  Stored sum:        {} bytes", stats.total_stored_bytes);
+    println!(
+        "  Compression ratio: {:.2}:1 ({:.1}% saved)",
+        stats.ratio(),
+        stats.space_savings_percent()
+    );
     if let Some(c) = arch.comment() {
         println!("  Comment:           {c}");
     }

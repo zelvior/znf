@@ -1,4 +1,5 @@
-//! End-to-end CLI tests for `znf` (`create`, `list`, `info`, `verify`, `extract`,
+//! End-to-end CLI tests for `znf` (`create`, `list`, `inspect`, `info`, `verify`,
+//! `test`, `add`, `remove`, `extract`, `--json`, `--select`, `--overwrite`,
 //! encryption via `--password-env`, and parity repair via `--repair-out`).
 
 use std::fs;
@@ -120,6 +121,14 @@ fn cli_full_lifecycle_unencrypted_and_encrypted() {
         String::from_utf8_lossy(&e_out.stderr)
     );
 
+    // Unauthenticated inspect on encrypted archive succeeds and reports ENCRYPTED index
+    let enc_insp = Command::new(znf_bin())
+        .args(["inspect", enc_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(enc_insp.status.success());
+    assert!(String::from_utf8_lossy(&enc_insp.stdout).contains("ENCRYPTED"));
+
     // Wrong password fails
     let bad_v = Command::new(znf_bin())
         .env("ZNF_TEST_PW", "wrong-pass")
@@ -228,6 +237,130 @@ fn cli_full_lifecycle_unencrypted_and_encrypted() {
         fs::read(&unpacked_path).unwrap(),
         b"# ZNF CLI Test\nExact bytes.\n"
     );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cli_top_level_zarc_commands_json_select_add_remove_and_test() {
+    let base = std::env::temp_dir().join(format!("znf-cli-top-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let folder = base.join("folder");
+    fs::create_dir_all(folder.join("sub")).unwrap();
+    fs::write(folder.join("a.txt"), b"alpha").unwrap();
+    fs::write(folder.join("sub/b.txt"), b"bravo").unwrap();
+
+    let archive = base.join("archive.zarc");
+
+    // 1. Positional `znf create archive.zarc ./folder`
+    let create_out = Command::new(znf_bin())
+        .args([
+            "create",
+            archive.to_str().unwrap(),
+            folder.to_str().unwrap(),
+            "--progress",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        create_out.status.success(),
+        "top-level create failed: {}",
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+
+    // 2. `znf list archive.zarc --json`
+    let list_out = Command::new(znf_bin())
+        .args(["list", archive.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(list_out.status.success());
+    let list_json = String::from_utf8_lossy(&list_out.stdout);
+    assert!(list_json.contains("\"path\":\"folder/a.txt\""));
+    assert!(list_json.contains("\"path\":\"folder/sub/b.txt\""));
+
+    // 3. `znf inspect archive.zarc --json` and `znf info archive.zarc --json`
+    let insp_out = Command::new(znf_bin())
+        .args(["inspect", archive.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(insp_out.status.success());
+    assert!(String::from_utf8_lossy(&insp_out.stdout).contains("\"format\":\"ZARC\""));
+
+    let info_out = Command::new(znf_bin())
+        .args(["info", archive.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(info_out.status.success());
+    assert!(String::from_utf8_lossy(&info_out.stdout).contains("\"uncompressed_bytes\":10"));
+
+    // 4. `znf test archive.zarc`
+    let test_out = Command::new(znf_bin())
+        .args(["test", archive.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(test_out.status.success());
+    assert!(String::from_utf8_lossy(&test_out.stdout).contains("intact"));
+
+    // 5. `znf add archive.zarc extra.txt`
+    let extra = base.join("extra.txt");
+    fs::write(&extra, b"charlie").unwrap();
+    let add_out = Command::new(znf_bin())
+        .args(["add", archive.to_str().unwrap(), extra.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(add_out.status.success());
+
+    // 6. `znf remove archive.zarc folder/a.txt`
+    let rem_out = Command::new(znf_bin())
+        .args(["remove", archive.to_str().unwrap(), "folder/a.txt"])
+        .output()
+        .unwrap();
+    assert!(rem_out.status.success());
+
+    // 7. `znf extract archive.zarc --output ./restored --select extra.txt`
+    let restored = base.join("restored");
+    let ext_out = Command::new(znf_bin())
+        .args([
+            "extract",
+            archive.to_str().unwrap(),
+            "--output",
+            restored.to_str().unwrap(),
+            "--select",
+            "extra.txt",
+        ])
+        .output()
+        .unwrap();
+    assert!(ext_out.status.success());
+    assert_eq!(fs::read(restored.join("extra.txt")).unwrap(), b"charlie");
+    assert!(!restored.join("folder/sub/b.txt").exists());
+
+    // 8. Extracting again without --overwrite fails; with --overwrite succeeds
+    let ext_fail = Command::new(znf_bin())
+        .args([
+            "extract",
+            archive.to_str().unwrap(),
+            "--output",
+            restored.to_str().unwrap(),
+            "--select",
+            "extra.txt",
+        ])
+        .output()
+        .unwrap();
+    assert!(!ext_fail.status.success());
+
+    let ext_ovw = Command::new(znf_bin())
+        .args([
+            "extract",
+            archive.to_str().unwrap(),
+            "--output",
+            restored.to_str().unwrap(),
+            "--select",
+            "extra.txt",
+            "--overwrite",
+        ])
+        .output()
+        .unwrap();
+    assert!(ext_ovw.status.success());
 
     let _ = fs::remove_dir_all(&base);
 }
