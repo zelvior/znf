@@ -44,7 +44,7 @@ impl ImageMetadata {
         macro_rules! maybe {
             ($key:expr, $val:expr) => {
                 if let Some(v) = $val {
-                    entries.push(($key.to_string(), v));
+                    entries.push(($key.to_string(), v.to_string()));
                 }
             };
         }
@@ -90,7 +90,8 @@ impl ImageMetadata {
                     "metadata TLV truncated at key length".into(),
                 ));
             }
-            let key_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+            let key_len =
+                u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
             offset += 2;
             if offset + key_len > bytes.len() {
                 return Err(ZimgError::MalformedImage(
@@ -98,7 +99,9 @@ impl ImageMetadata {
                 ));
             }
             let key = std::str::from_utf8(&bytes[offset..offset + key_len])
-                .map_err(|_| ZimgError::MalformedImage("metadata TLV key is not valid UTF-8".into()))?
+                .map_err(|_| {
+                    ZimgError::MalformedImage("metadata TLV key is not valid UTF-8".into())
+                })?
                 .to_owned();
             offset += key_len;
             if offset + 2 > bytes.len() {
@@ -106,7 +109,8 @@ impl ImageMetadata {
                     "metadata TLV truncated at value length".into(),
                 ));
             }
-            let val_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+            let val_len =
+                u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
             offset += 2;
             if offset + val_len > bytes.len() {
                 return Err(ZimgError::MalformedImage(
@@ -114,7 +118,9 @@ impl ImageMetadata {
                 ));
             }
             let val = std::str::from_utf8(&bytes[offset..offset + val_len])
-                .map_err(|_| ZimgError::MalformedImage("metadata TLV value is not valid UTF-8".into()))?
+                .map_err(|_| {
+                    ZimgError::MalformedImage("metadata TLV value is not valid UTF-8".into())
+                })?
                 .to_owned();
             offset += val_len;
             match key.as_str() {
@@ -133,4 +139,3 @@ impl ImageMetadata {
         Ok(meta)
     }
 }
-

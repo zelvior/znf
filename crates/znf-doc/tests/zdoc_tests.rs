@@ -1,11 +1,11 @@
 //! Comprehensive functional and security tests for ZDOC (.zdoc) v1.0.
 
+use znf_compression::Config as CompConfig;
 use znf_doc::{
     deserialize_document, serialize_document, BlockContent, CodeBlock, DecodeOptions, Document,
     Footnote, HeaderFooter, Hyperlink, Image, List, ListItem, MathBlock, PageNumbering, Paragraph,
     Section, Style, StyleRef, Table, TableCell, TableRow, TextDirection, TextRun,
 };
-use znf_compression::Config as CompConfig;
 
 fn make_section(id: u32, depth: u32) -> Section {
     Section {
@@ -31,8 +31,7 @@ fn make_section(id: u32, depth: u32) -> Section {
 
 fn roundtrip_check(doc: &Document) {
     let encoded = serialize_document(doc, &CompConfig::zstd(3), None, None).unwrap();
-    let decoded =
-        deserialize_document(&encoded.bytes, None, &DecodeOptions::default()).unwrap();
+    let decoded = deserialize_document(&encoded.bytes, None, &DecodeOptions::default()).unwrap();
     assert_eq!(
         decoded.document.title, doc.title,
         "title mismatch after round-trip"
@@ -155,7 +154,8 @@ fn metadata_roundtrip() {
     doc.author = Some("Author Name".into());
     doc.creator = Some("ZNF Tool".into());
     doc.language = Some("en-US".into());
-    doc.metadata.insert("custom-key".into(), "custom-value".into());
+    doc.metadata
+        .insert("custom-key".into(), "custom-value".into());
     roundtrip_check(&doc);
 }
 

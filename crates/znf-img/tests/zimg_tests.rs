@@ -1,14 +1,14 @@
 //! Comprehensive functional, security, and round-trip tests for ZIMG (.zimg) v1.0.
 
+use znf_compression::Config as CompConfig;
+use znf_crypto::KdfParams;
+use znf_img::encode::CompressionStrategy;
+use znf_img::format;
 use znf_img::{
     decode_image, encode_image, BitDepth, ColorModel, DecodeOptions, EncodeOptions, FilterType,
     Image, ImageMetadata, PixelFormat,
 };
 use znf_img::{AlphaInfo, ColorSpace};
-use znf_img::format;
-use znf_compression::Config as CompConfig;
-use znf_crypto::KdfParams;
-use znf_img::encode::CompressionStrategy;
 
 fn make_rgb8(width: u32, height: u32) -> Image {
     let pf = PixelFormat {
@@ -221,11 +221,7 @@ fn all_compression_modes() {
 #[test]
 fn all_compression_modes_rgba() {
     let img = make_rgba8(100, 100);
-    for cfg in [
-        CompConfig::stored(),
-        CompConfig::lz4(),
-        CompConfig::zstd(3),
-    ] {
+    for cfg in [CompConfig::stored(), CompConfig::lz4(), CompConfig::zstd(3)] {
         let opts = EncodeOptions {
             compression: cfg,
             ..EncodeOptions::default()
@@ -387,10 +383,7 @@ fn oversized_dimensions_rejected() {
         color_space: ColorSpace::Srgb,
     };
     let err = Image::new(crate::format::MAX_WIDTH + 1, 10, pf);
-    assert!(
-        err.is_err(),
-        "expected error for width exceeding MAX_WIDTH"
-    );
+    assert!(err.is_err(), "expected error for width exceeding MAX_WIDTH");
 }
 
 #[test]
@@ -430,11 +423,13 @@ fn filter_roundtrip_identity() {
         let prev_row: Vec<u8> = (0..100).map(|i| (i * 5) as u8).collect();
         let filtered2 = znf_img::encode::filter_row(filter, &row, Some(&prev_row), bpp);
         let mut unfiltered2 = vec![0u8; row.len()];
-        znf_img::encode::unfilter_row(
-            filter, &filtered2, &mut unfiltered2, Some(&prev_row), bpp,
-        )
-        .unwrap();
-        assert_eq!(unfiltered2, row, "filter {:?} with prev not invertible", filter);
+        znf_img::encode::unfilter_row(filter, &filtered2, &mut unfiltered2, Some(&prev_row), bpp)
+            .unwrap();
+        assert_eq!(
+            unfiltered2, row,
+            "filter {:?} with prev not invertible",
+            filter
+        );
     }
 }
 
@@ -442,10 +437,13 @@ fn filter_roundtrip_identity() {
 fn large_image_roundtrip() {
     // 1000x1000 RGB = 3MB, tests bounded memory and larger allocations
     let img = make_rgb8(1000, 1000);
-    roundtrip_check(&img, &EncodeOptions {
-        compression: CompConfig::zstd(6),
-        ..EncodeOptions::default()
-    });
+    roundtrip_check(
+        &img,
+        &EncodeOptions {
+            compression: CompConfig::zstd(6),
+            ..EncodeOptions::default()
+        },
+    );
 }
 
 #[test]
@@ -497,11 +495,14 @@ fn random_data_roundtrip() {
         state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         *byte = (state >> 16) as u8;
     }
-    roundtrip_check(&img, &EncodeOptions {
-        filter: FilterType::Paeth,
-        compression: CompConfig::zstd(3),
-        ..EncodeOptions::default()
-    });
+    roundtrip_check(
+        &img,
+        &EncodeOptions {
+            filter: FilterType::Paeth,
+            compression: CompConfig::zstd(3),
+            ..EncodeOptions::default()
+        },
+    );
 }
 
 #[test]
@@ -618,7 +619,10 @@ fn metadata_roundtrip_through_encode() {
     assert_eq!(decoded.metadata.title, Some("My Image".into()));
     assert_eq!(decoded.metadata.description, Some("A test image".into()));
     assert_eq!(decoded.metadata.creator, Some("ZNF Test Suite".into()));
-    assert_eq!(decoded.metadata.custom.get("source"), Some(&"unit-test".to_string()));
+    assert_eq!(
+        decoded.metadata.custom.get("source"),
+        Some(&"unit-test".to_string())
+    );
 }
 
 #[test]

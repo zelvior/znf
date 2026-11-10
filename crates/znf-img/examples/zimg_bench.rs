@@ -4,12 +4,12 @@
 //!   cargo run --release -p znf-img --example zimg_bench --offline
 
 use std::time::Instant;
+use znf_compression::Config as CompConfig;
 use znf_img::{
     decode_image, encode_image, BitDepth, ColorModel, DecodeOptions, EncodeOptions, FilterType,
     Image, ImageMetadata, PixelFormat,
 };
 use znf_img::{AlphaInfo, ColorSpace};
-use znf_compression::Config as CompConfig;
 
 fn make_rgb8(width: u32, height: u32) -> Image {
     let pf = PixelFormat {
@@ -170,11 +170,25 @@ fn main() {
 
     println!(
         "{:<12} {:>12} {:>13} {:>8} {:>12} {:>10} {:>13} {:>13}",
-        "Mode", "Input Size", "Archive Size", "Ratio", "Create Speed", "Verify", "Extract Speed", ""
+        "Mode",
+        "Input Size",
+        "Archive Size",
+        "Ratio",
+        "Create Speed",
+        "Verify",
+        "Extract Speed",
+        ""
     );
     println!(
         "{:<12} {:>12} {:>13} {:>8} {:>12} {:>10} {:>13} {:>13}",
-        "------------", "------------", "-------------", "--------", "------------", "----------", "-------------", "------------"
+        "------------",
+        "------------",
+        "-------------",
+        "--------",
+        "------------",
+        "----------",
+        "-------------",
+        "------------"
     );
 
     for (img_name, img) in &images {

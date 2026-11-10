@@ -1,7 +1,9 @@
 //! ZIMG decoding pipeline: parsing, decompression, integrity verification.
 
 use znf_compression::{decompress_bytes, Algorithm, Config as CompConfig};
-use znf_core::{FormatId, Header, Limits, HEADER_LEN, is_critical_extension_type, metadata::TLV_KDF_PARAMS};
+use znf_core::{
+    is_critical_extension_type, metadata::TLV_KDF_PARAMS, FormatId, Header, Limits, HEADER_LEN,
+};
 use znf_crypto::{decrypt, NONCE_LEN, TAG_LEN};
 use znf_integrity::{hash, Hash, Hasher, HASH_LEN};
 
@@ -79,18 +81,20 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
     let payload_end = header
         .payload_offset()
         .checked_add(header.payload_len())
-        .ok_or_else(|| ZimgError::InvalidDimensions("payload end overflow".into()))? as usize;
+        .ok_or_else(|| ZimgError::InvalidDimensions("payload end overflow".into()))?
+        as usize;
 
     if payload_end > bytes.len() {
-        return Err(ZimgError::MalformedImage("payload extends past end of file".into()));
+        return Err(ZimgError::MalformedImage(
+            "payload extends past end of file".into(),
+        ));
     }
 
     // Derive decryption key if encrypted.
     let derived_key = if header.flags().is_encrypted() {
-        let pw = opts
-            .password
-            .as_deref()
-            .ok_or_else(|| ZimgError::EncryptionMismatch("image is encrypted; password required"))?;
+        let pw = opts.password.as_deref().ok_or_else(|| {
+            ZimgError::EncryptionMismatch("image is encrypted; password required")
+        })?;
         // Find KDF params in metadata section.
         let kdf_params = find_kdf_params(&bytes[meta_start..payload_start], &opts.limits)?;
         Some(kdf_params.derive_key(pw)?)
@@ -140,9 +144,9 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
         if let Some(ref key) = derived_key {
             // The encrypted metadata TLV format: nonce(24B) || ciphertext+tag.
             // AAD = header bytes.
-            let nonce_arr: [u8; NONCE_LEN] = enc_meta[..NONCE_LEN]
-                .try_into()
-                .map_err(|_| ZimgError::MalformedImage("encrypted metadata nonce too short".into()))?;
+            let nonce_arr: [u8; NONCE_LEN] = enc_meta[..NONCE_LEN].try_into().map_err(|_| {
+                ZimgError::MalformedImage("encrypted metadata nonce too short".into())
+            })?;
             let ct = &enc_meta[NONCE_LEN..];
             let header_bytes = header.to_bytes()?;
             let decrypted = decrypt(key, &nonce_arr, ct, &header_bytes)?;
@@ -170,10 +174,13 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
     let mut offset = 0;
     while offset + 4 <= footer_bytes.len() {
         let ty = u16::from_le_bytes(footer_bytes[offset..offset + 2].try_into().unwrap());
-        let len = u32::from_le_bytes(footer_bytes[offset + 2..offset + 4].try_into().unwrap()) as usize;
+        let len =
+            u32::from_le_bytes(footer_bytes[offset + 2..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         if offset + len > footer_bytes.len() {
-            return Err(ZimgError::MalformedImage("footer TLV length exceeds remaining bytes".into()));
+            return Err(ZimgError::MalformedImage(
+                "footer TLV length exceeds remaining bytes".into(),
+            ));
         }
         let value = &footer_bytes[offset..offset + len];
         offset += len;
@@ -193,17 +200,25 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
                 let mut off = 4;
                 for _ in 0..count {
                     if off + CHUNK_INDEX_ENTRY_LEN > value.len() {
-                        return Err(ZimgError::MalformedImage("chunk index entry truncated".into()));
+                        return Err(ZimgError::MalformedImage(
+                            "chunk index entry truncated".into(),
+                        ));
                     }
-                    chunks.push(Chunk::from_wire_bytes(&value[off..off + CHUNK_INDEX_ENTRY_LEN])
-                        .ok_or_else(|| ZimgError::MalformedImage("invalid chunk index entry".into()))?);
+                    chunks.push(
+                        Chunk::from_wire_bytes(&value[off..off + CHUNK_INDEX_ENTRY_LEN])
+                            .ok_or_else(|| {
+                                ZimgError::MalformedImage("invalid chunk index entry".into())
+                            })?,
+                    );
                     off += CHUNK_INDEX_ENTRY_LEN;
                 }
                 chunk_index = Some(chunks);
             }
             TLV_ZIMG_PIXEL_BLAKE3 => {
                 if len < 4 {
-                    return Err(ZimgError::MalformedImage("pixel hash list too short".into()));
+                    return Err(ZimgError::MalformedImage(
+                        "pixel hash list too short".into(),
+                    ));
                 }
                 let count = u32::from_le_bytes(value[0..4].try_into().unwrap()) as usize;
                 let mut hashes = Vec::with_capacity(count);
@@ -212,21 +227,27 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
                     if off + HASH_LEN > value.len() {
                         return Err(ZimgError::MalformedImage("pixel hash truncated".into()));
                     }
-                    hashes.push(Hash::from_bytes(value[off..off + HASH_LEN].try_into().unwrap()));
+                    hashes.push(Hash::from_bytes(
+                        value[off..off + HASH_LEN].try_into().unwrap(),
+                    ));
                     off += HASH_LEN;
                 }
                 pixel_hashes = Some(hashes);
             }
             TLV_ARCHIVE_BLAKE3 => {
                 if len != HASH_LEN {
-                    return Err(ZimgError::MalformedImage("archive BLAKE3 wrong length".into()));
+                    return Err(ZimgError::MalformedImage(
+                        "archive BLAKE3 wrong length".into(),
+                    ));
                 }
                 archive_blake3 = Some(Hash::from_bytes(value.try_into().unwrap()));
             }
             _ => {
                 // Unknown TLV: check if critical.
                 if is_critical_extension_type(ty) {
-                    return Err(ZimgError::Core(znf_core::Error::UnsupportedCriticalExtension(ty)));
+                    return Err(ZimgError::Core(
+                        znf_core::Error::UnsupportedCriticalExtension(ty),
+                    ));
                 }
                 // Non-critical: ignore.
             }
@@ -234,10 +255,13 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
     }
 
     if !saw_footer_end {
-        return Err(ZimgError::MalformedImage("footer missing TLV_END marker".into()));
+        return Err(ZimgError::MalformedImage(
+            "footer missing TLV_END marker".into(),
+        ));
     }
 
-    let chunks = chunk_index.ok_or_else(|| ZimgError::MalformedImage("missing chunk index".into()))?;
+    let chunks =
+        chunk_index.ok_or_else(|| ZimgError::MalformedImage("missing chunk index".into()))?;
 
     // Verify whole-archive BLAKE3.
     if let Some(expected) = archive_blake3 {
@@ -245,10 +269,12 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
         hasher.update(&bytes[..payload_end]);
         let computed = hasher.finalize();
         if computed != expected {
-            return Err(ZimgError::Integrity(znf_integrity::IntegrityError::HashMismatch {
-                expected: expected.to_hex(),
-                computed: computed.to_hex(),
-            }));
+            return Err(ZimgError::Integrity(
+                znf_integrity::IntegrityError::HashMismatch {
+                    expected: expected.to_hex(),
+                    computed: computed.to_hex(),
+                },
+            ));
         }
     }
 
@@ -266,14 +292,18 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
             .checked_add(chunk.stored_len as usize)
             .ok_or_else(|| ZimgError::InvalidDimensions("chunk stored range overflow".into()))?;
         if chunk_end > payload_bytes.len() {
-            return Err(ZimgError::MalformedImage("chunk stored range exceeds payload".into()));
+            return Err(ZimgError::MalformedImage(
+                "chunk stored range exceeds payload".into(),
+            ));
         }
         let stored = &payload_bytes[chunk_start..chunk_end];
 
         // Decrypt if needed.
         let decompressed_input: Vec<u8> = if let Some(ref key) = derived_key {
             if stored.len() < NONCE_LEN + TAG_LEN {
-                return Err(ZimgError::MalformedImage("encrypted chunk too short".into()));
+                return Err(ZimgError::MalformedImage(
+                    "encrypted chunk too short".into(),
+                ));
             }
             let nonce_arr: [u8; NONCE_LEN] = stored[..NONCE_LEN].try_into().unwrap();
             let ct = &stored[NONCE_LEN..];
@@ -284,8 +314,7 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
         };
 
         // Decompress.
-        let mut uncompressed = Vec::new();
-        decompress_bytes(
+        let uncompressed = decompress_bytes(
             &decompressed_input,
             algo,
             &CompConfig {
@@ -299,7 +328,7 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
         if opts.verify_integrity {
             let computed_hash = hash(&uncompressed);
             if let Some(ref expected_hashes) = pixel_hashes {
-                if chunk.index as usize < expected_hashes.len() {
+                if (chunk.index as usize) < expected_hashes.len() {
                     if computed_hash != expected_hashes[chunk.index as usize] {
                         return Err(ZimgError::Integrity(
                             znf_integrity::IntegrityError::HashMismatch {
@@ -326,13 +355,21 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
             let row_start = u_offset;
             let row_end = row_start + row_filtered_len;
             if row_end > uncompressed.len() {
-                return Err(ZimgError::MalformedImage("chunk uncompressed data truncated".into()));
+                return Err(ZimgError::MalformedImage(
+                    "chunk uncompressed data truncated".into(),
+                ));
             }
             let filter_byte = uncompressed[row_start];
             let filter = FilterType::from_byte(filter_byte)
                 .ok_or_else(|| ZimgError::MalformedImage("invalid filter type".into()))?;
             let filtered_data = &uncompressed[row_start + 1..row_end];
-            unfilter_row(filter, filtered_data, &mut unfiltered_row, prev_row.as_deref(), bpp)?;
+            unfilter_row(
+                filter,
+                filtered_data,
+                &mut unfiltered_row,
+                prev_row.as_deref(),
+                bpp,
+            )?;
             // Write to image.
             let img_row = image.row_mut(y)?;
             img_row.copy_from_slice(&unfiltered_row[..row_bytes]);
@@ -354,14 +391,16 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
 }
 
 /// Find KDF params TLV in the metadata section.
-fn find_kdf_params(metadata: &[u8], limits: &Limits) -> Result<znf_crypto::KdfParams, ZimgError> {
+fn find_kdf_params(metadata: &[u8], _limits: &Limits) -> Result<znf_crypto::KdfParams, ZimgError> {
     let mut offset = 0;
     while offset + 4 <= metadata.len() {
         let ty = u16::from_le_bytes(metadata[offset..offset + 2].try_into().unwrap());
         let len = u32::from_le_bytes(metadata[offset + 2..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         if offset + len > metadata.len() {
-            return Err(ZimgError::MalformedImage("metadata TLV length exceeds remaining".into()));
+            return Err(ZimgError::MalformedImage(
+                "metadata TLV length exceeds remaining".into(),
+            ));
         }
         let value = &metadata[offset..offset + len];
         offset += len;
@@ -375,7 +414,9 @@ fn find_kdf_params(metadata: &[u8], limits: &Limits) -> Result<znf_crypto::KdfPa
         }
 
         if is_critical_extension_type(ty) {
-            return Err(ZimgError::Core(znf_core::Error::UnsupportedCriticalExtension(ty)));
+            return Err(ZimgError::Core(
+                znf_core::Error::UnsupportedCriticalExtension(ty),
+            ));
         }
     }
     Err(ZimgError::MalformedImage("missing KDF params TLV".into()))
@@ -385,7 +426,7 @@ fn find_kdf_params(metadata: &[u8], limits: &Limits) -> Result<znf_crypto::KdfPa
 #[allow(clippy::too_many_arguments)]
 fn parse_metadata_tlvs(
     metadata: &[u8],
-    limits: &Limits,
+    _limits: &Limits,
     width: &mut Option<u32>,
     height: &mut Option<u32>,
     pixel_format_wire: &mut Option<[u8; 4]>,
@@ -400,7 +441,9 @@ fn parse_metadata_tlvs(
         let len = u32::from_le_bytes(metadata[offset + 2..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         if offset + len > metadata.len() {
-            return Err(ZimgError::MalformedImage("metadata TLV length exceeds remaining".into()));
+            return Err(ZimgError::MalformedImage(
+                "metadata TLV length exceeds remaining".into(),
+            ));
         }
         let value = &metadata[offset..offset + len];
         offset += len;
@@ -412,23 +455,30 @@ fn parse_metadata_tlvs(
         match ty {
             TLV_ZIMG_DIMENSIONS => {
                 if len != 8 {
-                    return Err(ZimgError::MalformedImage("dimensions TLV wrong length".into()));
+                    return Err(ZimgError::MalformedImage(
+                        "dimensions TLV wrong length".into(),
+                    ));
                 }
                 *width = Some(u32::from_le_bytes(value[0..4].try_into().unwrap()));
                 *height = Some(u32::from_le_bytes(value[4..8].try_into().unwrap()));
             }
             TLV_ZIMG_PIXEL_FORMAT => {
                 if len != 4 {
-                    return Err(ZimgError::MalformedImage("pixel format TLV wrong length".into()));
+                    return Err(ZimgError::MalformedImage(
+                        "pixel format TLV wrong length".into(),
+                    ));
                 }
                 *pixel_format_wire = Some(value.try_into().unwrap());
             }
             TLV_ZIMG_COLOR_SPACE => {
                 if len != 1 {
-                    return Err(ZimgError::MalformedImage("color space TLV wrong length".into()));
+                    return Err(ZimgError::MalformedImage(
+                        "color space TLV wrong length".into(),
+                    ));
                 }
-                *color_space = ColorSpace::from_byte(value[0])
-                    .ok_or_else(|| ZimgError::UnsupportedPixelFormat("invalid color space".into()))?;
+                *color_space = ColorSpace::from_byte(value[0]).ok_or_else(|| {
+                    ZimgError::UnsupportedPixelFormat("invalid color space".into())
+                })?;
             }
             TLV_ZIMG_ICC_PROFILE => {
                 *icc_profile = Some(value.to_vec());
@@ -447,7 +497,9 @@ fn parse_metadata_tlvs(
             }
             _ => {
                 if is_critical_extension_type(ty) {
-                    return Err(ZimgError::Core(znf_core::Error::UnsupportedCriticalExtension(ty)));
+                    return Err(ZimgError::Core(
+                        znf_core::Error::UnsupportedCriticalExtension(ty),
+                    ));
                 }
             }
         }

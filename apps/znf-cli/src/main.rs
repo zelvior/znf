@@ -1505,13 +1505,18 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
     let meta_path = format!("{input_path}.meta");
     let meta_ok = std::path::Path::new(&meta_path).exists();
     let (width, height, pf) = if meta_ok {
-        let meta_raw = fs::read_to_string(&meta_path).map_err(|e| format!("failed to read '{meta_path}': {e}"))?;
+        let meta_raw = fs::read_to_string(&meta_path)
+            .map_err(|e| format!("failed to read '{meta_path}': {e}"))?;
         let parts: Vec<&str> = meta_raw.trim().split_whitespace().collect();
         if parts.len() < 4 {
             return Err(format!("invalid metadata sidecar '{meta_path}': expected 'width height color_model bit_depth'"));
         }
-        let w: u32 = parts[0].parse().map_err(|_| format!("invalid width in '{meta_path}'"))?;
-        let h: u32 = parts[1].parse().map_err(|_| format!("invalid height in '{meta_path}'"))?;
+        let w: u32 = parts[0]
+            .parse()
+            .map_err(|_| format!("invalid width in '{meta_path}'"))?;
+        let h: u32 = parts[1]
+            .parse()
+            .map_err(|_| format!("invalid height in '{meta_path}'"))?;
         let cm = match parts[2] {
             "rgb" => ColorModel::Rgb,
             "rgba" => ColorModel::Rgba,
@@ -1519,7 +1524,9 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
             "gray_alpha" => ColorModel::GrayAlpha,
             _ => ColorModel::Gray,
         };
-        let bd: u32 = parts[3].parse().map_err(|_| format!("invalid bit_depth in '{meta_path}'"))?;
+        let bd: u32 = parts[3]
+            .parse()
+            .map_err(|_| format!("invalid bit_depth in '{meta_path}'"))?;
         let bd = match bd {
             8 => BitDepth::Bits8,
             16 => BitDepth::Bits16,
@@ -1540,13 +1547,17 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
         };
         (w, h, pf)
     } else {
-        (1, 1, PixelFormat {
-            color_model: ColorModel::Gray,
-            bit_depth: BitDepth::Bits8,
-            channel_count: 1,
-            alpha: AlphaInfo::None,
-            color_space: ColorSpace::Srgb,
-        })
+        (
+            1,
+            1,
+            PixelFormat {
+                color_model: ColorModel::Gray,
+                bit_depth: BitDepth::Bits8,
+                channel_count: 1,
+                alpha: AlphaInfo::None,
+                color_space: ColorSpace::Srgb,
+            },
+        )
     };
 
     let mut image = Image::new(width, height, pf).map_err(|e| e.to_string())?;
@@ -1604,7 +1615,10 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
     }
 
     let kdf_params = if password.is_some() {
-        Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+        Some(
+            znf_crypto::KdfParams::new_default()
+                .map_err(|e| format!("KDF parameter generation failed: {e}"))?,
+        )
     } else {
         None
     };
@@ -1622,8 +1636,11 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
     if show_progress {
         eprintln!(
             "encoded {}x{} {} -> {} bytes ({} stored)",
-            image.width, image.height, image.pixel_format.color_model,
-            encoded.bytes.len(), encoded.info.stored_len
+            image.width,
+            image.height,
+            image.pixel_format.color_model,
+            encoded.bytes.len(),
+            encoded.info.stored_len
         );
     }
 
@@ -1639,7 +1656,11 @@ fn cmd_image_encode(m: &ArgMatches) -> Result<(), String> {
             encoded.info.encrypted
         );
     } else {
-        println!("encoded {} ({} bytes stored)", output.display(), encoded.info.stored_len);
+        println!(
+            "encoded {} ({} bytes stored)",
+            output.display(),
+            encoded.info.stored_len
+        );
     }
     Ok(())
 }
@@ -1684,7 +1705,13 @@ fn cmd_image_decode(m: &ArgMatches) -> Result<(), String> {
             decoded.encrypted, decoded.integrity_verified
         );
     } else {
-        println!("decoded {}x{} -> {} ({} bytes)", decoded.image.width, decoded.image.height, output_path, decoded.image.data.len());
+        println!(
+            "decoded {}x{} -> {} ({} bytes)",
+            decoded.image.width,
+            decoded.image.height,
+            output_path,
+            decoded.image.data.len()
+        );
     }
     Ok(())
 }
@@ -1696,7 +1723,10 @@ fn cmd_image_inspect(m: &ArgMatches) -> Result<(), String> {
     let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
         .map_err(|e| e.to_string())?;
     if hdr.format_id() != FormatId::ZIMG {
-        return Err(format!("not a ZIMG image (format id {:#010x})", hdr.format_id().raw()));
+        return Err(format!(
+            "not a ZIMG image (format id {:#010x})",
+            hdr.format_id().raw()
+        ));
     }
     let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
 
@@ -1722,8 +1752,15 @@ fn cmd_image_inspect(m: &ArgMatches) -> Result<(), String> {
     } else {
         println!("ZIMG Image Inspection");
         println!("  File:            {path} ({} bytes)", raw.len());
-        println!("  Format:          ZIMG v{}.{}", znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1);
-        println!("  Dimensions:      {} x {}", decoded.image.width, decoded.image.height);
+        println!(
+            "  Format:          ZIMG v{}.{}",
+            znf_img::ZIMG_SPEC_VERSION.0,
+            znf_img::ZIMG_SPEC_VERSION.1
+        );
+        println!(
+            "  Dimensions:      {} x {}",
+            decoded.image.width, decoded.image.height
+        );
         println!(
             "  Color model:     {:?} ({} channels, {:?}-bit, alpha={:?})",
             decoded.image.pixel_format.color_model,
@@ -1731,17 +1768,35 @@ fn cmd_image_inspect(m: &ArgMatches) -> Result<(), String> {
             decoded.image.pixel_format.bit_depth,
             decoded.image.pixel_format.alpha
         );
-        println!("  Color space:     {:?}", decoded.image.pixel_format.color_space);
+        println!(
+            "  Color space:     {:?}",
+            decoded.image.pixel_format.color_space
+        );
         println!("  Encrypted:       {}", decoded.encrypted);
         println!("  Integrity:       {}", decoded.integrity_verified);
         if !decoded.metadata.title.as_deref().unwrap_or("").is_empty() {
-            println!("  Title:           {}", decoded.metadata.title.as_deref().unwrap_or(""));
+            println!(
+                "  Title:           {}",
+                decoded.metadata.title.as_deref().unwrap_or("")
+            );
         }
-        if !decoded.metadata.description.as_deref().unwrap_or("").is_empty() {
-            println!("  Description:     {}", decoded.metadata.description.as_deref().unwrap_or(""));
+        if !decoded
+            .metadata
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            println!(
+                "  Description:     {}",
+                decoded.metadata.description.as_deref().unwrap_or("")
+            );
         }
         if !decoded.metadata.creator.as_deref().unwrap_or("").is_empty() {
-            println!("  Creator:         {}", decoded.metadata.creator.as_deref().unwrap_or(""));
+            println!(
+                "  Creator:         {}",
+                decoded.metadata.creator.as_deref().unwrap_or("")
+            );
         }
     }
     Ok(())
@@ -1763,11 +1818,18 @@ fn cmd_image_verify(m: &ArgMatches) -> Result<(), String> {
     if m.get_flag("json") {
         println!(
             "{{\"valid\":true,\"encrypted\":{},\"integrity_verified\":{},\"pixels_verified\":{}}}",
-            decoded.encrypted, decoded.integrity_verified, decoded.image.total_pixels()
+            decoded.encrypted,
+            decoded.integrity_verified,
+            decoded.image.total_pixels()
         );
     } else {
         println!("OK: verified '{}'", path);
-        println!("  Pixels:          {} x {} = {}", decoded.image.width, decoded.image.height, decoded.image.total_pixels());
+        println!(
+            "  Pixels:          {} x {} = {}",
+            decoded.image.width,
+            decoded.image.height,
+            decoded.image.total_pixels()
+        );
         println!("  Encrypted:       {}", decoded.encrypted);
         println!("  Integrity:       {}", decoded.integrity_verified);
     }
@@ -1788,9 +1850,9 @@ fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
     let decoded = decode_image(&raw, &opts).map_err(|e| e.to_string())?;
 
     if m.get_flag("remove") {
-        let output_path = m.get_one::<String>("output").ok_or_else(|| {
-            "--output is required with --remove".to_string()
-        })?;
+        let output_path = m
+            .get_one::<String>("output")
+            .ok_or_else(|| "--output is required with --remove".to_string())?;
         let overwrite = m.get_flag("overwrite");
         let output = std::path::Path::new(output_path);
         if output.exists() && !overwrite {
@@ -1801,7 +1863,10 @@ fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
         }
 
         let kdf_params = if password.is_some() {
-            Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+            Some(
+                znf_crypto::KdfParams::new_default()
+                    .map_err(|e| format!("KDF parameter generation failed: {e}"))?,
+            )
         } else {
             None
         };
@@ -1817,7 +1882,10 @@ fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
         fs::write(output, &encoded.bytes)
             .map_err(|e| format!("failed to write '{output_path}': {e}"))?;
         if m.get_flag("json") {
-            println!("{{\"status\":\"metadata_removed\",\"output\":\"{}\"}}", json_escape(output_path));
+            println!(
+                "{{\"status\":\"metadata_removed\",\"output\":\"{}\"}}",
+                json_escape(output_path)
+            );
         } else {
             println!("metadata removed -> {}", output.display());
         }
@@ -1835,12 +1903,24 @@ fn cmd_image_metadata(m: &ArgMatches) -> Result<(), String> {
             );
         } else {
             println!("Image Metadata");
-            if let Some(t) = &decoded.metadata.title { println!("  Title:       {t}"); }
-            if let Some(d) = &decoded.metadata.description { println!("  Description: {d}"); }
-            if let Some(c) = &decoded.metadata.creator { println!("  Creator:     {c}"); }
-            if let Some(c) = &decoded.metadata.created { println!("  Created:     {c}"); }
-            if let Some(s) = &decoded.metadata.software { println!("  Software:    {s}"); }
-            if let Some(c) = &decoded.metadata.copyright { println!("  Copyright:   {c}"); }
+            if let Some(t) = &decoded.metadata.title {
+                println!("  Title:       {t}");
+            }
+            if let Some(d) = &decoded.metadata.description {
+                println!("  Description: {d}");
+            }
+            if let Some(c) = &decoded.metadata.creator {
+                println!("  Creator:     {c}");
+            }
+            if let Some(c) = &decoded.metadata.created {
+                println!("  Created:     {c}");
+            }
+            if let Some(s) = &decoded.metadata.software {
+                println!("  Software:    {s}");
+            }
+            if let Some(c) = &decoded.metadata.copyright {
+                println!("  Copyright:   {c}");
+            }
             if !decoded.metadata.custom.is_empty() {
                 println!("  Custom ({} entries):", decoded.metadata.custom.len());
                 for (k, v) in &decoded.metadata.custom {
@@ -1866,7 +1946,10 @@ fn cmd_image_info(m: &ArgMatches) -> Result<(), String> {
     let hdr = znf_core::Header::decode(&raw, &znf_core::Limits::default(), Some(raw.len() as u64))
         .map_err(|e| e.to_string())?;
     if hdr.format_id() != FormatId::ZIMG {
-        return Err(format!("not a ZIMG image (format id {:#010x})", hdr.format_id().raw()));
+        return Err(format!(
+            "not a ZIMG image (format id {:#010x})",
+            hdr.format_id().raw()
+        ));
     }
     let password = resolve_password(m, hdr.flags().is_encrypted(), false)?;
 
@@ -1892,30 +1975,30 @@ fn cmd_image_info(m: &ArgMatches) -> Result<(), String> {
     } else {
         println!("ZIMG Image Information");
         println!("  File:            {path} ({} bytes)", raw.len());
-        println!("  Format:          ZIMG v{}.{}", znf_img::ZIMG_SPEC_VERSION.0, znf_img::ZIMG_SPEC_VERSION.1);
-        println!("  Dimensions:      {} x {}", decoded.image.width, decoded.image.height);
+        println!(
+            "  Format:          ZIMG v{}.{}",
+            znf_img::ZIMG_SPEC_VERSION.0,
+            znf_img::ZIMG_SPEC_VERSION.1
+        );
+        println!(
+            "  Dimensions:      {} x {}",
+            decoded.image.width, decoded.image.height
+        );
         println!("  Total pixels:    {}", decoded.image.total_pixels());
         println!(
             "  Color model:     {:?} ({} channels)",
-            decoded.image.pixel_format.color_model,
-            decoded.image.pixel_format.channel_count
+            decoded.image.pixel_format.color_model, decoded.image.pixel_format.channel_count
         );
         println!(
             "  Bit depth:       {:?}-bit per sample",
             decoded.image.pixel_format.bit_depth
         );
-        println!(
-            "  Alpha:           {:?}",
-            decoded.image.pixel_format.alpha
-        );
+        println!("  Alpha:           {:?}", decoded.image.pixel_format.alpha);
         println!(
             "  Color space:     {:?}",
             decoded.image.pixel_format.color_space
         );
-        println!(
-            "  Row stride:      {} bytes",
-            decoded.image.stride
-        );
+        println!("  Row stride:      {} bytes", decoded.image.stride);
         println!("  Data bytes:      {}", decoded.image.data.len());
         println!("  Encrypted:       {}", decoded.encrypted);
         println!("  Integrity:       {}", decoded.integrity_verified);
@@ -1967,7 +2050,10 @@ fn cmd_image_optimize(m: &ArgMatches) -> Result<(), String> {
     }
 
     let kdf_params = if password.is_some() {
-        Some(znf_crypto::KdfParams::new_default().map_err(|e| format!("KDF parameter generation failed: {e}"))?)
+        Some(
+            znf_crypto::KdfParams::new_default()
+                .map_err(|e| format!("KDF parameter generation failed: {e}"))?,
+        )
     } else {
         None
     };
@@ -1991,9 +2077,12 @@ fn cmd_image_optimize(m: &ArgMatches) -> Result<(), String> {
             raw.len() as f64 / encoded.bytes.len() as f64
         );
     } else {
-        println!("optimized {} -> {} ({} bytes stored)", input_path, output.display(), encoded.info.stored_len);
+        println!(
+            "optimized {} -> {} ({} bytes stored)",
+            input_path,
+            output.display(),
+            encoded.info.stored_len
+        );
     }
     Ok(())
 }
-
-const znf_img::ZIMG_SPEC_VERSION: (u16, u16) = (1, 0);

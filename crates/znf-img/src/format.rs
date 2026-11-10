@@ -74,12 +74,12 @@ pub const COLOR_SPACE_LINEAR: u8 = 1;
 pub const COLOR_SPACE_ICC: u8 = 2;
 
 /// --- Bit Depths ---
-
+///
 pub const BIT_DEPTH_8: u8 = 8;
 pub const BIT_DEPTH_16: u8 = 16;
 
 /// --- Compression Algorithm Identifiers (match znf_compression::Algorithm) ---
-
+///
 pub const COMPRESSION_STORED: u8 = 0;
 pub const COMPRESSION_ZSTD: u8 = 1;
 pub const COMPRESSION_LZ4: u8 = 2;

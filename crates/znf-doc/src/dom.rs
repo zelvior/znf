@@ -7,11 +7,11 @@
 use crate::error::ZdocError;
 use crate::format::{
     MAX_NESTING_DEPTH, MAX_PAGE_COUNT, MAX_TABLE_COLS, MAX_TABLE_ROWS, MAX_TEXT_RUN_LEN,
-    OBJECT_TYPE_ATTACHMENT, OBJECT_TYPE_CODE_BLOCK, OBJECT_TYPE_FOOTNOTE,
-    OBJECT_TYPE_HYPERLINK, OBJECT_TYPE_IMAGE, OBJECT_TYPE_LIST, OBJECT_TYPE_LIST_ITEM,
-    OBJECT_TYPE_MATH_BLOCK, OBJECT_TYPE_PARAGRAPH, OBJECT_TYPE_SECTION, OBJECT_TYPE_STYLE,
-    OBJECT_TYPE_TABLE, OBJECT_TYPE_TABLE_CELL, OBJECT_TYPE_TABLE_ROW,
-    OBJECT_TYPE_TEXT_RUN, TEXT_DIRECTION_AUTO, TEXT_DIRECTION_LTR, TEXT_DIRECTION_RTL,
+    OBJECT_TYPE_ATTACHMENT, OBJECT_TYPE_CODE_BLOCK, OBJECT_TYPE_FOOTNOTE, OBJECT_TYPE_HYPERLINK,
+    OBJECT_TYPE_IMAGE, OBJECT_TYPE_LIST, OBJECT_TYPE_LIST_ITEM, OBJECT_TYPE_MATH_BLOCK,
+    OBJECT_TYPE_PARAGRAPH, OBJECT_TYPE_SECTION, OBJECT_TYPE_STYLE, OBJECT_TYPE_TABLE,
+    OBJECT_TYPE_TABLE_CELL, OBJECT_TYPE_TABLE_ROW, OBJECT_TYPE_TEXT_RUN, TEXT_DIRECTION_AUTO,
+    TEXT_DIRECTION_LTR, TEXT_DIRECTION_RTL,
 };
 use std::collections::BTreeMap;
 use znf_integrity::{Hash, HASH_LEN};
@@ -463,32 +463,50 @@ impl Document {
         // Validate top-level objects have unique IDs.
         for image in self.images.values() {
             if !seen_ids.insert(image.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("image {}", image.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "image {}",
+                    image.id
+                )));
             }
         }
         for attachment in self.attachments.values() {
             if !seen_ids.insert(attachment.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("attachment {}", attachment.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "attachment {}",
+                    attachment.id
+                )));
             }
         }
         for hyperlink in self.hyperlinks.values() {
             if !seen_ids.insert(hyperlink.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("hyperlink {}", hyperlink.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "hyperlink {}",
+                    hyperlink.id
+                )));
             }
         }
         for footnote in self.footnotes.values() {
             if !seen_ids.insert(footnote.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("footnote {}", footnote.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "footnote {}",
+                    footnote.id
+                )));
             }
         }
         for code_block in self.code_blocks.values() {
             if !seen_ids.insert(code_block.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("code_block {}", code_block.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "code_block {}",
+                    code_block.id
+                )));
             }
         }
         for math_block in self.math_blocks.values() {
             if !seen_ids.insert(math_block.id) {
-                return Err(ZdocError::DuplicateIdentifier(format!("math_block {}", math_block.id)));
+                return Err(ZdocError::DuplicateIdentifier(format!(
+                    "math_block {}",
+                    math_block.id
+                )));
             }
         }
         for list in self.lists.values() {
@@ -509,11 +527,8 @@ impl Document {
     }
 
     fn validate_styles(&self) -> Result<(), ZdocError> {
-        let style_map: BTreeMap<&str, &Style> = self
-            .styles
-            .iter()
-            .map(|s| (s.id.as_str(), s))
-            .collect();
+        let style_map: BTreeMap<&str, &Style> =
+            self.styles.iter().map(|s| (s.id.as_str(), s)).collect();
         let mut visiting = std::collections::HashSet::new();
         let mut visited = std::collections::HashSet::new();
 
@@ -571,7 +586,10 @@ impl Document {
         }
 
         if !seen_ids.insert(section.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("section {}", section.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "section {}",
+                section.id
+            )));
         }
 
         for block in &section.content {
@@ -603,7 +621,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(p.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("paragraph {}", p.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "paragraph {}",
+                p.id
+            )));
         }
         // Validate heading level.
         if let Some(level) = p.heading_level {
@@ -635,7 +656,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(run.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("text_run {}", run.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "text_run {}",
+                run.id
+            )));
         }
         if run.text.len() > MAX_TEXT_RUN_LEN {
             return Err(ZdocError::ResourceLimitExceeded(format!(
@@ -655,7 +679,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(table.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("table {}", table.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "table {}",
+                table.id
+            )));
         }
         if table.rows.len() as u32 > MAX_TABLE_ROWS {
             return Err(ZdocError::InvalidDimensions(format!(
@@ -684,7 +711,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(row.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("table_row {}", row.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "table_row {}",
+                row.id
+            )));
         }
         for cell in &row.cells {
             self.validate_table_cell(cell, depth, seen_ids)?;
@@ -699,7 +729,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(cell.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("table_cell {}", cell.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "table_cell {}",
+                cell.id
+            )));
         }
         for block in &cell.content {
             self.validate_block(block, depth + 1, seen_ids)?;
@@ -713,7 +746,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(block.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("code_block {}", block.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "code_block {}",
+                block.id
+            )));
         }
         if block.content.len() > MAX_TEXT_RUN_LEN {
             return Err(ZdocError::ResourceLimitExceeded(format!(
@@ -732,7 +768,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(block.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("math_block {}", block.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "math_block {}",
+                block.id
+            )));
         }
         Ok(())
     }
@@ -765,7 +804,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(item.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("list_item {}", item.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "list_item {}",
+                item.id
+            )));
         }
         if item.depth > MAX_NESTING_DEPTH as u32 {
             return Err(ZdocError::ResourceLimitExceeded(format!(
@@ -785,7 +827,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(hf.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("header_footer {}", hf.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "header_footer {}",
+                hf.id
+            )));
         }
         for block in &hf.content {
             self.validate_block(block, 1, seen_ids)?;
@@ -799,7 +844,10 @@ impl Document {
         seen_ids: &mut std::collections::HashSet<u32>,
     ) -> Result<(), ZdocError> {
         if !seen_ids.insert(image.id) {
-            return Err(ZdocError::DuplicateIdentifier(format!("image {}", image.id)));
+            return Err(ZdocError::DuplicateIdentifier(format!(
+                "image {}",
+                image.id
+            )));
         }
         Ok(())
     }

@@ -12,11 +12,11 @@ use crate::dom::{
 };
 use crate::error::ZdocError;
 use crate::format::{
-    MAX_ATTACHMENT_SIZE, MAX_TEXT_RUN_LEN, OBJECT_INDEX_ENTRY_LEN,
-    OBJECT_TYPE_ATTACHMENT, OBJECT_TYPE_CODE_BLOCK, OBJECT_TYPE_FOOTNOTE, OBJECT_TYPE_HYPERLINK,
-    OBJECT_TYPE_IMAGE, OBJECT_TYPE_LIST, OBJECT_TYPE_LIST_ITEM, OBJECT_TYPE_MATH_BLOCK,
-    OBJECT_TYPE_PARAGRAPH, OBJECT_TYPE_SECTION, OBJECT_TYPE_STYLE, OBJECT_TYPE_TABLE,
-    OBJECT_TYPE_TABLE_CELL, OBJECT_TYPE_TABLE_ROW, OBJECT_TYPE_TEXT_RUN,
+    MAX_ATTACHMENT_SIZE, MAX_TEXT_RUN_LEN, OBJECT_INDEX_ENTRY_LEN, OBJECT_TYPE_ATTACHMENT,
+    OBJECT_TYPE_CODE_BLOCK, OBJECT_TYPE_FOOTNOTE, OBJECT_TYPE_HYPERLINK, OBJECT_TYPE_IMAGE,
+    OBJECT_TYPE_LIST, OBJECT_TYPE_LIST_ITEM, OBJECT_TYPE_MATH_BLOCK, OBJECT_TYPE_PARAGRAPH,
+    OBJECT_TYPE_SECTION, OBJECT_TYPE_STYLE, OBJECT_TYPE_TABLE, OBJECT_TYPE_TABLE_CELL,
+    OBJECT_TYPE_TABLE_ROW, OBJECT_TYPE_TEXT_RUN,
 };
 use znf_compression::{compress_bytes, Algorithm, Config as CompConfig};
 use znf_core::{Flags, FormatId, Header, ZnfCompression, ZnfEncryption, HEADER_LEN};
@@ -67,7 +67,14 @@ pub fn serialize_document(
         &doc_header,
         compression,
     )?;
-    object_index.push((0, OBJECT_TYPE_SECTION, offset, stored.len() as u32, doc_header.len() as u32, hash));
+    object_index.push((
+        0,
+        OBJECT_TYPE_SECTION,
+        offset,
+        stored.len() as u32,
+        doc_header.len() as u32,
+        hash,
+    ));
     total_uncompressed += doc_header.len() as u64;
 
     // Serialize sections.
@@ -80,7 +87,14 @@ pub fn serialize_document(
             &data,
             compression,
         )?;
-        object_index.push((section.id, OBJECT_TYPE_SECTION, offset, stored.len() as u32, data.len() as u32, hash));
+        object_index.push((
+            section.id,
+            OBJECT_TYPE_SECTION,
+            offset,
+            stored.len() as u32,
+            data.len() as u32,
+            hash,
+        ));
         total_uncompressed += data.len() as u64;
     }
 
@@ -108,14 +122,16 @@ pub fn serialize_document(
     // Serialize images.
     for (id, image) in &document.images {
         let data = serialize_image(image)?;
-        let (offset, stored, hash) = write_object(
-            &mut payload,
-            OBJECT_TYPE_IMAGE,
+        let (offset, stored, hash) =
+            write_object(&mut payload, OBJECT_TYPE_IMAGE, *id, &data, compression)?;
+        object_index.push((
             *id,
-            &data,
-            compression,
-        )?;
-        object_index.push((*id, OBJECT_TYPE_IMAGE, offset, stored.len() as u32, data.len() as u32, hash));
+            OBJECT_TYPE_IMAGE,
+            offset,
+            stored.len() as u32,
+            data.len() as u32,
+            hash,
+        ));
         total_uncompressed += data.len() as u64;
     }
 
@@ -143,13 +159,8 @@ pub fn serialize_document(
     // Serialize hyperlinks.
     for (id, hyperlink) in &document.hyperlinks {
         let data = serialize_hyperlink(hyperlink)?;
-        let (offset, stored, hash) = write_object(
-            &mut payload,
-            OBJECT_TYPE_HYPERLINK,
-            *id,
-            &data,
-            compression,
-        )?;
+        let (offset, stored, hash) =
+            write_object(&mut payload, OBJECT_TYPE_HYPERLINK, *id, &data, compression)?;
         object_index.push((
             *id,
             OBJECT_TYPE_HYPERLINK,
@@ -164,13 +175,8 @@ pub fn serialize_document(
     // Serialize footnotes.
     for (id, footnote) in &document.footnotes {
         let data = serialize_footnote(footnote)?;
-        let (offset, stored, hash) = write_object(
-            &mut payload,
-            OBJECT_TYPE_FOOTNOTE,
-            *id,
-            &data,
-            compression,
-        )?;
+        let (offset, stored, hash) =
+            write_object(&mut payload, OBJECT_TYPE_FOOTNOTE, *id, &data, compression)?;
         object_index.push((
             *id,
             OBJECT_TYPE_FOOTNOTE,
@@ -227,14 +233,16 @@ pub fn serialize_document(
     // Serialize lists.
     for (id, list) in &document.lists {
         let data = serialize_list(list)?;
-        let (offset, stored, hash) = write_object(
-            &mut payload,
-            OBJECT_TYPE_LIST,
+        let (offset, stored, hash) =
+            write_object(&mut payload, OBJECT_TYPE_LIST, *id, &data, compression)?;
+        object_index.push((
             *id,
-            &data,
-            compression,
-        )?;
-        object_index.push((*id, OBJECT_TYPE_LIST, offset, stored.len() as u32, data.len() as u32, hash));
+            OBJECT_TYPE_LIST,
+            offset,
+            stored.len() as u32,
+            data.len() as u32,
+            hash,
+        ));
         total_uncompressed += data.len() as u64;
     }
 
@@ -301,42 +309,78 @@ pub fn serialize_document(
     {
         let mut buf = Vec::new();
         buf.extend_from_slice(&document.document_id);
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_DOCUMENT_ID, &buf);
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_DOCUMENT_ID,
+            &buf,
+        );
     }
 
     // Title.
     if let Some(ref title) = document.title {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_TITLE, title.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_TITLE,
+            title.as_bytes(),
+        );
     }
     // Subject.
     if let Some(ref subject) = document.subject {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_SUBJECT, subject.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_SUBJECT,
+            subject.as_bytes(),
+        );
     }
     // Author.
     if let Some(ref author) = document.author {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_AUTHOR, author.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_AUTHOR,
+            author.as_bytes(),
+        );
     }
     // Creator.
     if let Some(ref creator) = document.creator {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_CREATOR, creator.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_CREATOR,
+            creator.as_bytes(),
+        );
     }
     // Created.
     if let Some(ref created) = document.created {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_CREATED, created.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_CREATED,
+            created.as_bytes(),
+        );
     }
     // Modified.
     if let Some(ref modified) = document.modified {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_MODIFIED, modified.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_MODIFIED,
+            modified.as_bytes(),
+        );
     }
     // Language.
     if let Some(ref language) = document.language {
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_LANGUAGE, language.as_bytes());
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_LANGUAGE,
+            language.as_bytes(),
+        );
     }
 
     // Structured key-value metadata.
     if !document.metadata.is_empty() {
         let kv = encode_metadata_kv(&document.metadata);
-        write_tlv(&mut metadata_bytes, crate::format::TLV_ZDOC_METADATA_KV, &kv);
+        write_tlv(
+            &mut metadata_bytes,
+            crate::format::TLV_ZDOC_METADATA_KV,
+            &kv,
+        );
     }
 
     let meta_len = metadata_bytes.len() as u64;
@@ -495,7 +539,8 @@ fn serialize_document_header(document: &Document) -> Result<Vec<u8>, ZdocError> 
     out.extend_from_slice(&(document.page_numbering.style.len() as u16).to_le_bytes());
     out.extend_from_slice(document.page_numbering.style.as_bytes());
     out.extend_from_slice(&document.page_numbering.start.to_le_bytes());
-    out.extend_from_slice(&document.page_numbering.display as u8).to_le_bytes();
+    out.extend_from_slice(&document.page_numbering.display as u8)
+        .to_le_bytes();
     Ok(out)
 }
 
@@ -576,7 +621,9 @@ fn serialize_text_run(out: &mut Vec<u8>, run: &TextRun) -> Result<(), ZdocError>
     if tb.len() > MAX_TEXT_RUN_LEN {
         return Err(ZdocError::ResourceLimitExceeded(format!(
             "text_run {} length {} exceeds max {}",
-            run.id, tb.len(), MAX_TEXT_RUN_LEN
+            run.id,
+            tb.len(),
+            MAX_TEXT_RUN_LEN
         )));
     }
     out.extend_from_slice(&(tb.len() as u32).to_le_bytes());
@@ -719,7 +766,9 @@ fn serialize_attachment(attachment: &Attachment) -> Result<Vec<u8>, ZdocError> {
     if attachment.data.len() as u64 > MAX_ATTACHMENT_SIZE {
         return Err(ZdocError::ResourceLimitExceeded(format!(
             "attachment {} size {} exceeds max {}",
-            attachment.id, attachment.data.len(), MAX_ATTACHMENT_SIZE
+            attachment.id,
+            attachment.data.len(),
+            MAX_ATTACHMENT_SIZE
         )));
     }
     let mut out = Vec::new();
@@ -769,7 +818,9 @@ fn serialize_code_block(block: &CodeBlock) -> Result<Vec<u8>, ZdocError> {
     if cb.len() > MAX_TEXT_RUN_LEN {
         return Err(ZdocError::ResourceLimitExceeded(format!(
             "code_block {} content length {} exceeds max {}",
-            block.id, cb.len(), MAX_TEXT_RUN_LEN
+            block.id,
+            cb.len(),
+            MAX_TEXT_RUN_LEN
         )));
     }
     out.extend_from_slice(&(cb.len() as u32).to_le_bytes());
