@@ -40,8 +40,10 @@ pub struct DecodedImage {
     pub image: Image,
     /// Image metadata (title, description, etc.).
     pub metadata: ImageMetadata,
-    /// Color space.
+    /// Color space (from TLV_ZIMG_COLOR_SPACE).
     pub color_space: ColorSpace,
+    /// Embedded ICC profile bytes (from TLV_ZIMG_ICC_PROFILE), if present.
+    pub icc_profile: Option<Vec<u8>>,
     /// Whether the archive was encrypted.
     pub encrypted: bool,
     /// Whether integrity verification passed.
@@ -106,6 +108,7 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
     let mut height: Option<u32> = None;
     let mut pixel_format_wire: Option<[u8; 4]> = None;
     let mut color_space: ColorSpace = ColorSpace::Srgb;
+    let mut icc_profile: Option<Vec<u8>> = None;
     let mut metadata = ImageMetadata::new();
     let mut encryption_meta: Option<Vec<u8>> = None; // encrypted metadata TLV
 
@@ -117,6 +120,7 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
             &mut height,
             &mut pixel_format_wire,
             &mut color_space,
+            &mut icc_profile,
             &mut metadata,
             &mut encryption_meta,
         )?;
@@ -126,8 +130,10 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
     let h = height.ok_or_else(|| ZimgError::MalformedImage("missing height TLV".into()))?;
     let pf_wire = pixel_format_wire
         .ok_or_else(|| ZimgError::MalformedImage("missing pixel format TLV".into()))?;
-    let pf = PixelFormat::from_wire_bytes(pf_wire)
+    let mut pf = PixelFormat::from_wire_bytes(pf_wire)
         .ok_or_else(|| ZimgError::UnsupportedPixelFormat("invalid pixel format bytes".into()))?;
+    // Apply the color space from the dedicated TLV (from_wire_bytes defaults to Srgb).
+    pf.color_space = color_space;
 
     // If encrypted metadata was present, decrypt it now.
     if let Some(enc_meta) = encryption_meta {
@@ -308,15 +314,15 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
 
         // Unfilter and write rows.
         let uncompressed_offset = chunk.uncompressed_offset as usize;
-        let rows_this_chunk = (chunk.uncompressed_len as usize) / row_bytes;
+        // uncompressed_len includes the 1-byte filter prefix per row.
+        let row_filtered_len = 1 + row_bytes;
+        let rows_this_chunk = (chunk.uncompressed_len as usize) / row_filtered_len;
         let mut unfiltered_row = vec![0u8; row_bytes];
         let mut prev_row: Option<Vec<u8>> = None;
 
         let mut u_offset = 0;
         for r in 0..rows_this_chunk {
             let y = (uncompressed_offset as u64 / row_bytes as u64 + r as u64) as u32;
-            // Each filtered row is 1 filter byte + row_bytes data bytes.
-            let row_filtered_len = 1 + row_bytes;
             let row_start = u_offset;
             let row_end = row_start + row_filtered_len;
             if row_end > uncompressed.len() {
@@ -341,6 +347,7 @@ pub fn decode_image(bytes: &[u8], opts: &DecodeOptions) -> Result<DecodedImage, 
         image,
         metadata,
         color_space,
+        icc_profile,
         encrypted: derived_key.is_some(),
         integrity_verified,
     })
@@ -375,6 +382,7 @@ fn find_kdf_params(metadata: &[u8], limits: &Limits) -> Result<znf_crypto::KdfPa
 }
 
 /// Parse all metadata TLVs from the metadata section.
+#[allow(clippy::too_many_arguments)]
 fn parse_metadata_tlvs(
     metadata: &[u8],
     limits: &Limits,
@@ -382,6 +390,7 @@ fn parse_metadata_tlvs(
     height: &mut Option<u32>,
     pixel_format_wire: &mut Option<[u8; 4]>,
     color_space: &mut ColorSpace,
+    icc_profile: &mut Option<Vec<u8>>,
     metadata_out: &mut ImageMetadata,
     encryption_meta: &mut Option<Vec<u8>>,
 ) -> Result<(), ZimgError> {
@@ -422,7 +431,7 @@ fn parse_metadata_tlvs(
                     .ok_or_else(|| ZimgError::UnsupportedPixelFormat("invalid color space".into()))?;
             }
             TLV_ZIMG_ICC_PROFILE => {
-                // ICC profile bytes preserved; not parsed here.
+                *icc_profile = Some(value.to_vec());
             }
             TLV_ZIMG_COMPRESSION => {
                 // Compression info is informational.

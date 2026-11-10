@@ -58,7 +58,7 @@ pub mod metadata;
 
 pub use chunk::{Chunk, ChunkStrategy};
 pub use decode::{decode_image, DecodeOptions, DecodedImage};
-pub use encode::{encode_image, EncodeOptions, FilterType, ImageInfo};
+pub use encode::{encode_image, CompressionStrategy, EncodeOptions, FilterType, ImageInfo};
 pub use error::ZimgError;
 pub use format::{
     COMPRESSION_LZ4, COMPRESSION_STORED, COMPRESSION_ZSTD, DEFAULT_COMPRESSION_LEVEL,

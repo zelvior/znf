@@ -46,6 +46,15 @@ impl FilterType {
     }
 }
 
+/// Automatic compression strategy selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionStrategy {
+    /// Use the configured algorithm exactly as specified.
+    Fixed,
+    /// Try each available algorithm and pick the smallest output for each chunk.
+    Adaptive,
+}
+
 /// Encoding configuration.
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
@@ -53,12 +62,21 @@ pub struct EncodeOptions {
     pub compression: CompConfig,
     /// Filter type to apply before compression.
     pub filter: FilterType,
+    /// When `true`, selects the best filter per row (Sub/Up/Average/Paeth)
+    /// based on which produces the smallest filtered output for that row.
+    pub adaptive_filter: bool,
     /// Chunking strategy.
     pub chunk_strategy: ChunkStrategy,
+    /// Compression strategy: fixed algorithm or adaptive per-chunk selection.
+    pub compression_strategy: CompressionStrategy,
     /// Optional encryption password.
     pub password: Option<Vec<u8>>,
     /// Optional KDF parameters (required if password is set).
     pub kdf_params: Option<KdfParams>,
+    /// Optional structured metadata to store in the metadata TLV section.
+    pub metadata: Option<ImageMetadata>,
+    /// Optional ICC profile bytes to embed (sets color space to ICC).
+    pub icc_profile: Option<Vec<u8>>,
     /// Whether to include per-chunk integrity in footer.
     pub include_integrity: bool,
 }
@@ -68,9 +86,13 @@ impl Default for EncodeOptions {
         EncodeOptions {
             compression: CompConfig::zstd(DEFAULT_COMPRESSION_LEVEL as i32),
             filter: FilterType::None,
+            adaptive_filter: false,
             chunk_strategy: ChunkStrategy::default(),
+            compression_strategy: CompressionStrategy::Fixed,
             password: None,
             kdf_params: None,
+            metadata: None,
+            icc_profile: None,
             include_integrity: true,
         }
     }
@@ -204,6 +226,106 @@ pub(crate) fn unfilter_row(
     Ok(())
 }
 
+/// Select the best filter for a single row by trying all filters and picking
+/// the one that produces the smallest filtered output. Ties resolve to the
+/// first filter in this order: None, Sub, Up, Average, Paeth.
+#[must_use]
+pub(crate) fn select_best_filter(
+    row: &[u8],
+    prev_row: Option<&[u8]>,
+    bpp: usize,
+) -> FilterType {
+    let filters = [
+        FilterType::None,
+        FilterType::Sub,
+        FilterType::Up,
+        FilterType::Average,
+        FilterType::Paeth,
+    ];
+    let mut best = FilterType::None;
+    let mut best_len = usize::MAX;
+    for f in filters {
+        let filtered = filter_row(f, row, prev_row, bpp);
+        if filtered.len() < best_len {
+            best_len = filtered.len();
+            best = f;
+        }
+    }
+    best
+}
+
+/// Try compressing `data` with each algorithm and return the smallest result
+/// along with the chosen algorithm.
+///
+/// When `strategy` is `Fixed`, uses the configured algorithm as-is.
+/// When `Adaptive`, tests all algorithms and picks the smallest output.
+///
+/// Returns `(compressed_bytes, chosen_algorithm)`.
+#[must_use]
+pub(crate) fn compress_with_strategy(
+    data: &[u8],
+    opts: &EncodeOptions,
+) -> Result<(Vec<u8>, Algorithm), ZimgError> {
+    match opts.compression_strategy {
+        CompressionStrategy::Fixed => {
+            let c = compress_bytes(data, &opts.compression)?;
+            Ok((c, opts.compression.algorithm))
+        }
+        CompressionStrategy::Adaptive => {
+            let mut best: Option<(Vec<u8>, Algorithm)> = None;
+            for algo in [Algorithm::None, Algorithm::Zstd, Algorithm::Lz4] {
+                let cfg = match algo {
+                    Algorithm::None => CompConfig::stored(),
+                    Algorithm::Zstd => CompConfig::zstd(opts.compression.zstd_level),
+                    Algorithm::Lz4 => CompConfig::lz4(),
+                };
+                match compress_bytes(data, &cfg) {
+                    Ok(c) => {
+                        let is_better = best
+                            .as_ref()
+                            .map_or(true, |b| c.len() < b.0.len());
+                        if is_better {
+                            best = Some((c, algo));
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+            best.ok_or_else(|| {
+                ZimgError::Compression(znf_compression::CompressionError::CorruptData(
+                    "all compression strategies failed".into(),
+                ))
+            })
+        }
+    }
+}
+
+/// Pick the single best compression algorithm globally by testing on the
+/// first chunk's uncompressed data, so the header algorithm stays consistent
+/// across all chunks. Returns the chosen algorithm.
+#[must_use]
+pub(crate) fn select_global_algorithm(
+    first_chunk_data: &[u8],
+    opts: &EncodeOptions,
+) -> Algorithm {
+    let mut best_algo = opts.compression.algorithm;
+    let mut best_len = usize::MAX;
+    for algo in [Algorithm::None, Algorithm::Zstd, Algorithm::Lz4] {
+        let cfg = match algo {
+            Algorithm::None => CompConfig::stored(),
+            Algorithm::Zstd => CompConfig::zstd(opts.compression.zstd_level),
+            Algorithm::Lz4 => CompConfig::lz4(),
+        };
+        if let Ok(c) = compress_bytes(first_chunk_data, &cfg) {
+            if c.len() < best_len {
+                best_len = c.len();
+                best_algo = algo;
+            }
+        }
+    }
+    best_algo
+}
+
 /// Encoded image output, ready to be written to a file.
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
@@ -255,6 +377,37 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         opts.chunk_strategy,
     );
 
+    // When using adaptive compression, select a single global algorithm from
+    // the first chunk so the header stays consistent across all chunks.
+    let mut effective_compression = opts.compression;
+    if opts.compression_strategy == CompressionStrategy::Adaptive && !chunk_specs.is_empty() {
+        // Build the first chunk's uncompressed data to test algorithms on.
+        let first = &chunk_specs[0];
+        let rows_this_chunk = first.2 as usize;
+        let mut first_chunk_data = Vec::with_capacity((1 + row_bytes) * rows_this_chunk);
+        for r in 0..rows_this_chunk {
+            let y = (first.0 + r as u32);
+            let row_data = image.row(y)?;
+            let prev = if y > 0 {
+                Some(image.row(y - 1)?)
+            } else {
+                None
+            };
+            let filter = if opts.adaptive_filter {
+                select_best_filter(row_data, prev, bpp)
+            } else {
+                opts.filter
+            };
+            let filtered = filter_row(filter, row_data, prev, bpp);
+            first_chunk_data.extend_from_slice(&filtered);
+        }
+        let chosen = select_global_algorithm(&first_chunk_data, opts);
+        effective_compression = CompConfig {
+            algorithm: chosen,
+            ..opts.compression
+        };
+    }
+
     // Filter + compress each chunk.
     let mut stored_chunks: Vec<Vec<u8>> = Vec::with_capacity(chunk_specs.len());
     let mut chunk_hashes: Vec<Hash> = Vec::with_capacity(chunk_specs.len());
@@ -263,7 +416,7 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
 
     for (_row_start, _offset, row_count) in &chunk_specs {
         let rows_this_chunk = *row_count as usize;
-        let mut chunk_uncompressed = Vec::with_capacity(row_bytes * rows_this_chunk);
+        let mut chunk_uncompressed = Vec::with_capacity((1 + row_bytes) * rows_this_chunk);
 
         for r in 0..rows_this_chunk {
             let y = (_row_start + r as u32);
@@ -273,20 +426,24 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
             } else {
                 None
             };
-            let filtered = filter_row(opts.filter, row_data, prev, bpp);
+            let filter = if opts.adaptive_filter {
+                select_best_filter(row_data, prev, bpp)
+            } else {
+                opts.filter
+            };
+            let filtered = filter_row(filter, row_data, prev, bpp);
             chunk_uncompressed.extend_from_slice(&filtered);
         }
 
         let chunk_hash = hash(&chunk_uncompressed);
         chunk_hashes.push(chunk_hash);
 
-        // Compress.
-        let stored = match opts.compression.algorithm {
-            Algorithm::None => chunk_uncompressed.clone(),
-            Algorithm::Zstd | Algorithm::LZ4 => {
-                compress_bytes(&chunk_uncompressed, &opts.compression)?
-            }
-        };
+        // Compress using the selected strategy (with global algorithm for Adaptive).
+        let (stored, _chosen_algo) = compress_with_strategy(&chunk_uncompressed, &EncodeOptions {
+            compression: effective_compression,
+            compression_strategy: CompressionStrategy::Fixed,
+            ..opts.clone()
+        })?;
         total_stored += stored.len() as u64;
         total_uncompressed += chunk_uncompressed.len() as u64;
         stored_chunks.push(stored);
@@ -347,22 +504,44 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         metadata_bytes.extend_from_slice(&pf_bytes);
     }
 
+    // Determine effective color space: ICC profile takes precedence.
+    let effective_color_space = if opts.icc_profile.is_some() {
+        ColorSpace::Icc
+    } else {
+        pf.color_space
+    };
+
     // Color space.
     {
-        let cs = [pf.color_space.as_byte()];
+        let cs = [effective_color_space.as_byte()];
         metadata_bytes.extend_from_slice(&(TLV_ZIMG_COLOR_SPACE as u16).to_le_bytes());
         metadata_bytes.extend_from_slice(&(cs.len() as u32).to_le_bytes());
         metadata_bytes.extend_from_slice(&cs);
     }
 
+    // Embedded ICC profile (if provided).
+    if let Some(ref icc) = opts.icc_profile {
+        metadata_bytes.extend_from_slice(&(TLV_ZIMG_ICC_PROFILE as u16).to_le_bytes());
+        metadata_bytes.extend_from_slice(&(icc.len() as u32).to_le_bytes());
+        metadata_bytes.extend_from_slice(icc);
+    }
+
+    // Structured metadata (if provided).
+    if let Some(ref meta) = opts.metadata {
+        let meta_bytes = meta.encode();
+        metadata_bytes.extend_from_slice(&(TLV_ZIMG_METADATA as u16).to_le_bytes());
+        metadata_bytes.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+        metadata_bytes.extend_from_slice(&meta_bytes);
+    }
+
     // Compression.
     {
-        let comp_algo = match opts.compression.algorithm {
+        let comp_algo = match effective_compression.algorithm {
             Algorithm::None => COMPRESSION_STORED,
             Algorithm::Zstd => COMPRESSION_ZSTD,
             Algorithm::LZ4 => COMPRESSION_LZ4,
         };
-        let comp_level = opts.compression.zstd_level as u8;
+        let comp_level = effective_compression.zstd_level as u8;
         let comp_bytes = [comp_algo, comp_level];
         metadata_bytes.extend_from_slice(&(TLV_ZIMG_COMPRESSION as u16).to_le_bytes());
         metadata_bytes.extend_from_slice(&(comp_bytes.len() as u32).to_le_bytes());
@@ -385,7 +564,9 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
                 index: ci as u32,
                 uncompressed_offset: spec.1,
                 stored_offset: chunk_stored_offsets[ci],
-                uncompressed_len: (row_bytes * rows) as u32,
+                // uncompressed_len includes the 1-byte filter prefix per row
+                // so the decoder can reconstruct row boundaries exactly.
+                uncompressed_len: ((1 + row_bytes) * rows) as u32,
                 stored_len: chunk_stored_lens[ci],
                 blake3_hash: chunk_hashes[ci],
             };
@@ -424,11 +605,7 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
     let mut hdr = Header::new(FormatId::ZIMG, 1, 0);
     hdr.flags_mut().set(Flags::HAS_METADATA, meta_len > 0);
     hdr.flags_mut().set(Flags::HAS_FOOTER, true);
-    if opts.compression.algorithm != Algorithm::None {
-        hdr.set_compression(ZnfCompression::Zstd);
-    } else {
-        hdr.set_compression(ZnfCompression::None);
-    }
+    hdr.set_compression(ZnfCompression::from_algorithm(effective_compression.algorithm));
     if derived_key.is_some() {
         hdr.set_encryption(ZnfEncryption::XChaCha20Poly1305);
     }
@@ -462,12 +639,18 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
     bytes.extend_from_slice(&payload);
     bytes.extend_from_slice(&footer);
 
+    // Reflect the effective color space (ICC overrides) in the info.
+    let info_pf = PixelFormat {
+        color_space: effective_color_space,
+        ..pf
+    };
+
     Ok(EncodedImage {
         bytes,
         info: ImageInfo {
             width,
             height,
-            pixel_format: pf,
+            pixel_format: info_pf,
             compression: opts.compression.clone(),
             uncompressed_len: total_uncompressed,
             stored_len: total_stored,
