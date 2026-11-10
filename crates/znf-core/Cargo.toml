@@ -1,0 +1,21 @@
+[package]
+name = "znf-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZNF binary-format engine: headers, metadata, TLVs, streaming containers, integrity, compression, and encryption"
+
+[dependencies]
+thiserror.workspace = true
+znf-integrity = { path = "../znf-integrity" }
+znf-compression = { path = "../znf-compression" }
+znf-crypto = { path = "../znf-crypto" }
+znf-stream = { path = "../znf-stream" }
+
+[lib]
+name = "znf_core"
+path = "src/lib.rs"

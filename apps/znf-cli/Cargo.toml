@@ -1,0 +1,25 @@
+[package]
+name = "znf-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "Command-line interface for ZNF and ZARC (.zarc) archives"
+
+[[bin]]
+name = "znf"
+path = "src/main.rs"
+
+[dependencies]
+thiserror.workspace = true
+clap.workspace = true
+rpassword.workspace = true
+znf-core = { path = "../../crates/znf-core" }
+znf-compression = { path = "../../crates/znf-compression" }
+znf-crypto = { path = "../../crates/znf-crypto" }
+znf-integrity = { path = "../../crates/znf-integrity" }
+znf-recovery = { path = "../../crates/znf-recovery" }
+znf-zarc = { path = "../../crates/znf-zarc" }
