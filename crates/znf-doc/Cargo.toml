@@ -1,0 +1,22 @@
+[package]
+name = "znf-doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+description = "ZDOC (.zdoc) lossless document format: encoding, decoding, and integrity for Zelvior Native Formats"
+
+[dependencies]
+thiserror.workspace = true
+znf-core = { path = "../znf-core" }
+znf-compression = { path = "../znf-compression" }
+znf-crypto = { path = "../znf-crypto" }
+znf-integrity = { path = "../znf-integrity" }
+znf-stream = { path = "../znf-stream" }
+
+[lib]
+name = "znf_doc"
+path = "src/lib.rs"
