@@ -9,6 +9,7 @@ members = [
     "crates/znf-recovery",
     "crates/znf-zarc",
     "crates/znf-img",
+    "crates/znf-doc",
     "apps/znf-cli",
 ]
 

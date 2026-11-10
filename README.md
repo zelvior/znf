@@ -20,6 +20,7 @@ ZNF is a modular, security-hardened binary format foundation written in safe Rus
 | **Recovery Primitives** (Single-block XOR `ParityStripe` repair and damaged-stream header magic/CRC scanner) | **Implemented** | `crates/znf-recovery` |
 | **ZARC (`.zarc`) v1.0 Container** (Create, list, inspect, verify, parity-repair, and traversal-safe extraction) | **Implemented** | `crates/znf-zarc`, `specifications/zarc/ZARC-SPEC.md` |
 | **`znf` CLI** (`znf zarc create`, `list`, `extract`, `verify`, `info`) | **Implemented** | `apps/znf-cli` |
+| **ZDOC (`.zdoc`) v1.0 Document Format** (DOM, serialization, TLV-based binary spec, compression, encryption, BLAKE3 integrity) | **Implemented** | `crates/znf-doc`, `specifications/zdoc/ZDOC-SPEC.md` |
 | Multi-erasure Reed-Solomon recovery codes | *Planned* | `crates/znf-recovery` (v0.2+) |
 | Solid cross-file dictionary archiving mode | *Planned* | `crates/znf-zarc` (v0.2+) |
 | Additional ZNF Format IDs & C/Android JNI FFI bindings | *Planned* | Future crates |
@@ -44,9 +45,11 @@ znf/
 │   ├── znf-stream/                    # Bounded chunk framing and BoundedReader
 │   ├── znf-recovery/                  # XOR block parity stripe & header scanner
 │   └── znf-zarc/                      # .zarc container format implementation
+│   └── znf-doc/                       # .zdoc document format implementation
 ├── specifications/
 │   ├── core/ZNF-CORE-SPEC.md          # Normative ZNF Core v1.0 wire specification
-│   └── zarc/ZARC-SPEC.md              # Normative ZARC (.zarc) v1.0 wire specification
+│   ├── zarc/ZARC-SPEC.md              # Normative ZARC (.zarc) v1.0 wire specification
+│   └── zdoc/ZDOC-SPEC.md              # Normative ZDOC (.zdoc) v1.0 wire specification
 ├── docs/
 │   ├── architecture/OVERVIEW.md       # Crate graph & design rationale
 │   ├── security/THREAT-MODEL.md       # Threat model & security invariants
