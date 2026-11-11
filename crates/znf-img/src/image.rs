@@ -5,7 +5,7 @@
 //! little-endian byte order for 16-bit depths, matching the wire format.
 
 use crate::error::ZimgError;
-use znf_integrity::{Hash, HASH_LEN};
+use znf_integrity::Hash;
 
 /// Color model describing how channels are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -220,24 +220,16 @@ pub struct Image {
 impl Image {
     /// Create a new image buffer with a contiguous row stride.
     #[must_use]
-    pub fn new(
-        width: u32,
-        height: u32,
-        pixel_format: PixelFormat,
-    ) -> Result<Self, ZimgError> {
+    pub fn new(width: u32, height: u32, pixel_format: PixelFormat) -> Result<Self, ZimgError> {
         let bpp = pixel_format.bytes_per_pixel();
         // Check for overflow in stride calculation.
-        let stride = width
-            .checked_mul(bpp as u32)
-            .ok_or_else(|| ZimgError::InvalidDimensions(format!(
-                "width {width} * bytes_per_pixel {bpp} overflows"
-            )))? as usize;
+        let stride = width.checked_mul(bpp as u32).ok_or_else(|| {
+            ZimgError::InvalidDimensions(format!("width {width} * bytes_per_pixel {bpp} overflows"))
+        })? as usize;
         // Check for overflow in total size.
-        let total = stride
-            .checked_mul(height as usize)
-            .ok_or_else(|| ZimgError::InvalidDimensions(format!(
-                "stride {stride} * height {} overflows", height
-            )))?;
+        let total = stride.checked_mul(height as usize).ok_or_else(|| {
+            ZimgError::InvalidDimensions(format!("stride {stride} * height {} overflows", height))
+        })?;
         let total_pixels = (width as u64)
             .checked_mul(height as u64)
             .ok_or_else(|| ZimgError::InvalidDimensions("width * height overflows".into()))?;

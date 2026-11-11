@@ -3,7 +3,7 @@
 //! Pixel data is divided into independently compressed chunks (rows or tiles)
 //! to allow bounded memory usage and random-access decoding.
 
-use znf_integrity::{Hash, HASH_LEN};
+use znf_integrity::Hash;
 
 /// A single compressed chunk of pixel data.
 #[derive(Debug, Clone)]

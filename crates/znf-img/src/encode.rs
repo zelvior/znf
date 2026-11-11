@@ -3,7 +3,7 @@
 use znf_compression::{compress_bytes, Algorithm, Config as CompConfig};
 use znf_core::{Flags, FormatId, Header, ZnfCompression, ZnfEncryption, HEADER_LEN};
 use znf_crypto::{encrypt, generate_nonce, KdfParams, NONCE_LEN};
-use znf_integrity::{hash, Hasher, Hash};
+use znf_integrity::{hash, Hash, Hasher, HASH_LEN};
 
 use crate::chunk::{compute_chunks, Chunk, ChunkStrategy};
 use crate::error::ZimgError;
@@ -230,11 +230,7 @@ pub(crate) fn unfilter_row(
 /// the one that produces the smallest filtered output. Ties resolve to the
 /// first filter in this order: None, Sub, Up, Average, Paeth.
 #[must_use]
-pub(crate) fn select_best_filter(
-    row: &[u8],
-    prev_row: Option<&[u8]>,
-    bpp: usize,
-) -> FilterType {
+pub(crate) fn select_best_filter(row: &[u8], prev_row: Option<&[u8]>, bpp: usize) -> FilterType {
     let filters = [
         FilterType::None,
         FilterType::Sub,
@@ -281,9 +277,7 @@ pub(crate) fn compress_with_strategy(
                 };
                 match compress_bytes(data, &cfg) {
                     Ok(c) => {
-                        let is_better = best
-                            .as_ref()
-                            .map_or(true, |b| c.len() < b.0.len());
+                        let is_better = best.as_ref().map_or(true, |b| c.len() < b.0.len());
                         if is_better {
                             best = Some((c, algo));
                         }
@@ -304,10 +298,7 @@ pub(crate) fn compress_with_strategy(
 /// first chunk's uncompressed data, so the header algorithm stays consistent
 /// across all chunks. Returns the chosen algorithm.
 #[must_use]
-pub(crate) fn select_global_algorithm(
-    first_chunk_data: &[u8],
-    opts: &EncodeOptions,
-) -> Algorithm {
+pub(crate) fn select_global_algorithm(first_chunk_data: &[u8], opts: &EncodeOptions) -> Algorithm {
     let mut best_algo = opts.compression.algorithm;
     let mut best_len = usize::MAX;
     for algo in [Algorithm::None, Algorithm::Zstd, Algorithm::Lz4] {
@@ -369,13 +360,7 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
     }
 
     // Compute chunks.
-    let chunk_specs = compute_chunks(
-        width,
-        height,
-        bpp,
-        image.stride,
-        opts.chunk_strategy,
-    );
+    let chunk_specs = compute_chunks(width, height, bpp, image.stride, opts.chunk_strategy);
 
     // When using adaptive compression, select a single global algorithm from
     // the first chunk so the header stays consistent across all chunks.
@@ -386,13 +371,9 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         let rows_this_chunk = first.2 as usize;
         let mut first_chunk_data = Vec::with_capacity((1 + row_bytes) * rows_this_chunk);
         for r in 0..rows_this_chunk {
-            let y = (first.0 + r as u32);
+            let y = first.0 + r as u32;
             let row_data = image.row(y)?;
-            let prev = if y > 0 {
-                Some(image.row(y - 1)?)
-            } else {
-                None
-            };
+            let prev = if y > 0 { Some(image.row(y - 1)?) } else { None };
             let filter = if opts.adaptive_filter {
                 select_best_filter(row_data, prev, bpp)
             } else {
@@ -419,13 +400,9 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         let mut chunk_uncompressed = Vec::with_capacity((1 + row_bytes) * rows_this_chunk);
 
         for r in 0..rows_this_chunk {
-            let y = (_row_start + r as u32);
+            let y = _row_start + r as u32;
             let row_data = image.row(y)?;
-            let prev = if y > 0 {
-                Some(image.row(y - 1)?)
-            } else {
-                None
-            };
+            let prev = if y > 0 { Some(image.row(y - 1)?) } else { None };
             let filter = if opts.adaptive_filter {
                 select_best_filter(row_data, prev, bpp)
             } else {
@@ -439,11 +416,14 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         chunk_hashes.push(chunk_hash);
 
         // Compress using the selected strategy (with global algorithm for Adaptive).
-        let (stored, _chosen_algo) = compress_with_strategy(&chunk_uncompressed, &EncodeOptions {
-            compression: effective_compression,
-            compression_strategy: CompressionStrategy::Fixed,
-            ..opts.clone()
-        })?;
+        let (stored, _chosen_algo) = compress_with_strategy(
+            &chunk_uncompressed,
+            &EncodeOptions {
+                compression: effective_compression,
+                compression_strategy: CompressionStrategy::Fixed,
+                ..opts.clone()
+            },
+        )?;
         total_stored += stored.len() as u64;
         total_uncompressed += chunk_uncompressed.len() as u64;
         stored_chunks.push(stored);
@@ -506,7 +486,7 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
 
     // Determine effective color space: ICC profile takes precedence.
     let effective_color_space = if opts.icc_profile.is_some() {
-        ColorSpace::Icc
+        crate::image::ColorSpace::Icc
     } else {
         pf.color_space
     };
@@ -539,7 +519,7 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
         let comp_algo = match effective_compression.algorithm {
             Algorithm::None => COMPRESSION_STORED,
             Algorithm::Zstd => COMPRESSION_ZSTD,
-            Algorithm::LZ4 => COMPRESSION_LZ4,
+            Algorithm::Lz4 => COMPRESSION_LZ4,
         };
         let comp_level = effective_compression.zstd_level as u8;
         let comp_bytes = [comp_algo, comp_level];
@@ -605,13 +585,16 @@ pub fn encode_image(image: &Image, opts: &EncodeOptions) -> Result<EncodedImage,
     let mut hdr = Header::new(FormatId::ZIMG, 1, 0);
     hdr.flags_mut().set(Flags::HAS_METADATA, meta_len > 0);
     hdr.flags_mut().set(Flags::HAS_FOOTER, true);
-    hdr.set_compression(ZnfCompression::from_algorithm(effective_compression.algorithm));
+    hdr.set_compression(ZnfCompression::from_algorithm(
+        effective_compression.algorithm,
+    ));
     if derived_key.is_some() {
         hdr.set_encryption(ZnfEncryption::XChaCha20Poly1305);
     }
     let payload_offset = HEADER_LEN as u64 + meta_len;
     let payload_len = payload.len() as u64;
-    hdr.set_payload_span(payload_offset, payload_len);
+    hdr.set_payload_offset(payload_offset);
+    hdr.set_payload_len(payload_len);
 
     let mut header_bytes = [0u8; 64];
     hdr.encode(&mut header_bytes)?;
