@@ -9,6 +9,10 @@ Cargo.lock
 .cargo/config.toml
 .cargo/config
 
+# Repository-local Rust toolchain install (rustup + cargo live in-repo)
+.cargo/
+.rustup/
+
 # IDE
 .idea/
 .vscode/
